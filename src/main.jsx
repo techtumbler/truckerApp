@@ -7,7 +7,7 @@ import App from './App.jsx'
 import Timer from './routes/Timer.jsx'
 import Map from './routes/Map.jsx'
 import Docs from './routes/Docs.jsx'
-import Lsva from './routes/Lsva.jsx'
+import Lsva from './routes/lsva.jsx'
 
 const router = createBrowserRouter([
   { path: '/', element: <App/>, children: [
