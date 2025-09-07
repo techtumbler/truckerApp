@@ -11,4 +11,5 @@ export function dueDateFor(periodId){
   // Fälligkeit: 20. des Folgemonats (vereinfachte Regel)
   const d = new Date(y, m, 20)
   return d.toISOString()
+// return
 }
