@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { loadTimer, saveTimer, defaultState, formatHMS } from '../lib/timer'
+import { loadTimer, saveTimer, defaultState, formatHMS, computeElapsed, status } from '../lib/timer'
 
 export default function Timer(){
   const [st, setSt] = useState(loadTimer())
   const tickRef = useRef(null)
   const lastWarnRef = useRef({ m15:false, m5:false })
 
-  // persist on every state change
+  // persist
   useEffect(()=>{ saveTimer(st) }, [st])
 
   // ticker
@@ -15,21 +15,7 @@ export default function Timer(){
     tickRef.current = setInterval(()=>{
       setSt(s => {
         if(s.mode === 'driving' || s.mode === 'break'){
-          const base = s.startedAt ? Date.now() - new Date(s.startedAt).getTime() : 0
-          const elapsed = base
-          // warn logic (foreground banners)
-          if(s.mode === 'driving') {
-            const left = s.drivingLimitMs - elapsed
-            if (left <= 15*60*1000 && !lastWarnRef.current.m15) {
-              lastWarnRef.current.m15 = true
-              toast('⚠️ Noch ~15 Min bis empfohlener Pause')
-            }
-            if (left <= 5*60*1000 && !lastWarnRef.current.m5) {
-              lastWarnRef.current.m5 = true
-              toast('⏰ Noch ~5 Min bis empfohlener Pause')
-            }
-          }
-          return { ...s, elapsedMs: elapsed }
+          return { ...s, elapsedMs: computeElapsed(s.startedAt) }
         }
         return s
       })
@@ -37,15 +23,28 @@ export default function Timer(){
     return ()=> clearInterval(tickRef.current)
   }, [])
 
+  // foreground toasts on thresholds
+  useEffect(()=>{
+    const stat = status(st)
+    if (stat.kind === 'driving') {
+      if (st.warn15 && stat.left <= 15*60*1000 && !lastWarnRef.current.m15) {
+        lastWarnRef.current.m15 = true; toast('⚠️ Noch ~15 Min bis empfohlener Pause')
+      }
+      if (st.warn5 && stat.left <= 5*60*1000 && !lastWarnRef.current.m5) {
+        lastWarnRef.current.m5 = true; toast('⏰ Noch ~5 Min bis empfohlener Pause')
+      }
+    }
+  }, [st])
+
   function toast(msg){
-    // einfache In-App-Meldung
     const el = document.createElement('div')
     el.textContent = msg
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:#ff7a00;color:#111;padding:10px 14px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.3);z-index:9999;font-weight:600'
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:#ff7a00;color:#111;padding:10px 14px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.3);zIndex:9999;font-weight:600'
     document.body.appendChild(el)
-    setTimeout(()=> el.remove(), 3000)
+    setTimeout(()=> el.remove(), 3200)
   }
 
+  // Actions
   function startDriving(){
     if(st.mode === 'driving') return
     lastWarnRef.current = { m15:false, m5:false }
@@ -55,11 +54,25 @@ export default function Timer(){
     if(st.mode === 'break') return
     setSt(s => ({ ...s, mode:'break', startedAt:new Date().toISOString(), elapsedMs:0 }))
   }
+  function switchTo(newMode){
+    // beendet aktuellen Block und startet den gewünschten
+    if(st.mode !== 'idle'){
+      const end = new Date()
+      const dur = Math.max(0, end - new Date(st.startedAt))
+      setSt(s => ({
+        ...s,
+        history: [{ mode:s.mode, start:s.startedAt, end:end.toISOString(), durationMs:dur }, ...s.history].slice(0,50),
+        mode:'idle', startedAt:null, elapsedMs:0
+      }))
+      setTimeout(()=> { newMode === 'driving' ? startDriving() : startBreak() }, 0)
+    } else {
+      newMode === 'driving' ? startDriving() : startBreak()
+    }
+  }
   function stopCurrent(){
     if(st.mode === 'idle') return
     const end = new Date()
-    const start = new Date(st.startedAt)
-    const dur = Math.max(0, end - start)
+    const dur = Math.max(0, end - new Date(st.startedAt))
     setSt(s => ({
       ...s,
       history: [{ mode:s.mode, start:s.startedAt, end:end.toISOString(), durationMs:dur }, ...s.history].slice(0,50),
@@ -71,33 +84,83 @@ export default function Timer(){
     setSt(defaultState())
   }
 
-  const drivingElapsed = st.mode==='driving' ? st.elapsedMs : 0
-  const drivingLeft = Math.max(0, st.drivingLimitMs - drivingElapsed)
-  const breakElapsed = st.mode==='break' ? st.elapsedMs : 0
+  const s = status(st)
+
+  // dynamische Klassen
+  const barClass = lvl => `progress ${lvl}`
+  const primaryClass = lvl => `btn dynamic ${lvl}`
+
+  // kontextabhängige Primary-Action
+  let primaryAction = null
+  if (s.kind === 'idle') {
+    primaryAction = (
+      <div className="btn-row">
+        <button className="btn primary" onClick={()=>startDriving()}>▶️ Fahrt starten</button>
+        <button className="btn" onClick={()=>startBreak()}>☕ Pause starten</button>
+      </div>
+    )
+  } else if (s.kind === 'driving') {
+    primaryAction = (
+      <div className="btn-row">
+        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')} title="Pausenmodus starten">
+          ☕ Pause jetzt
+        </button>
+        <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
+      </div>
+    )
+  } else if (s.kind === 'break') {
+    primaryAction = (
+      <div className="btn-row">
+        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')} title="Fahrt fortsetzen">
+          ▶️ Weiterfahren
+        </button>
+        <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
+      </div>
+    )
+  }
 
   return (
     <section className="card">
       <h1>Pausen-Timer</h1>
       <p style={{color:'var(--muted)'}}>Hinweis: Richtwerte (kein Rechtsersatz). 4 h 30 min Fahren ⇒ 45 min Pause.</p>
 
-      <div className="card" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}}>
+      <div className="card grid-2">
+        {/* Fahrt */}
         <div>
           <h2 style={{marginTop:0}}>Fahrt</h2>
-          <div style={{fontSize:'38px',fontWeight:800}}>{formatHMS(drivingElapsed)}</div>
-          <div style={{opacity:.8, margin:'6px 0'}}>Rest bis Empfehlung: <strong>{formatHMS(drivingLeft)}</strong></div>
-          <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-            <button className="btn primary" onClick={startDriving}>▶️ Start Fahrt</button>
-            <button className="btn" onClick={stopCurrent} disabled={st.mode!=='driving'}>⏹️ Stopp</button>
+          <div className={`badge ${s.kind==='driving' ? s.level : 'muted'}`}>
+            {s.kind==='driving' ? (s.level==='critical' ? 'Kritisch' : s.level==='warn' ? 'Bald Pause' : 'OK') : 'Bereit'}
+          </div>
+          <div className="time">{formatHMS(st.mode==='driving' ? st.elapsedMs : 0)}</div>
+          <div className="meta">
+            Rest bis Empfehlung: <strong>{s.kind==='driving' ? formatHMS(s.left) : formatHMS(st.drivingLimitMs)}</strong>
+          </div>
+          <div className={barClass(s.kind==='driving'?s.level:'ok')}>
+            <span style={{width: `${(s.kind==='driving'? s.pct : 0)*100}%`}} />
           </div>
         </div>
+
+        {/* Pause */}
         <div>
           <h2 style={{marginTop:0}}>Pause</h2>
-          <div style={{fontSize:'38px',fontWeight:800}}>{formatHMS(breakElapsed)}</div>
-          <div style={{opacity:.8, margin:'6px 0'}}>Empfehlung: <strong>00:45:00</strong></div>
-          <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-            <button className="btn" onClick={startBreak}>☕ Start Pause</button>
-            <button className="btn" onClick={stopCurrent} disabled={st.mode!=='break'}>⏹️ Stopp</button>
+          <div className={`badge ${s.kind==='break' ? (s.done ? 'ok' : 'warn') : 'muted'}`}>
+            {s.kind==='break' ? (s.done ? 'OK' : 'Noch') : 'Bereit'}
           </div>
+          <div className="time">{formatHMS(st.mode==='break' ? st.elapsedMs : 0)}</div>
+          <div className="meta">
+            Ziel: <strong>00:45:00</strong>{s.kind==='break' && !s.done ? <> • Rest: <strong>{formatHMS(s.left)}</strong></> : null}
+          </div>
+          <div className={barClass(s.kind==='break'?(s.done?'ok':'warn'):'ok')}>
+            <span style={{width: `${(s.kind==='break'? s.pct : 0)*100}%`}} />
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2 style={{marginTop:0}}>Aktionen</h2>
+        {primaryAction}
+        <div className="btn-row">
+          <button className="btn" onClick={resetAll}>♻️ Zurücksetzen</button>
         </div>
       </div>
 
@@ -111,9 +174,6 @@ export default function Timer(){
           ))}
           {st.history.length===0 && <li>Kein Verlauf vorhanden.</li>}
         </ul>
-        <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-          <button className="btn" onClick={resetAll}>♻️ Zurücksetzen</button>
-        </div>
       </div>
     </section>
   )

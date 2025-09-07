@@ -8,3 +8,24 @@
 .btn{display:inline-flex;gap:8px;align-items:center;padding:10px 14px;border-radius:12px;border:1px solid var(--border);color:var(--text);text-decoration:none}
 .btn.primary{background:var(--accent);color:#111;border-color:transparent}
 h1,h2{margin:.4em 0}
+/* --- Timer UI dynamics --- */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.time{font-size:38px;font-weight:800}
+.meta{opacity:.8;margin:6px 0}
+.badge{display:inline-block;padding:4px 10px;border-radius:999px;font-weight:700;font-size:12px;border:1px solid var(--border);margin-bottom:8px}
+.badge.ok{background:var(--accent-2,#19c37d);color:#0b0f1a;border-color:transparent}
+.badge.warn{background:#ffb84d;color:#111;border-color:transparent}
+.badge.critical{background:#ff5c5c;color:#111;border-color:transparent;animation:pulse 1s infinite}
+.badge.muted{background:transparent;color:var(--muted)}
+@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.05)}100%{transform:scale(1)}}
+
+.progress{position:relative;height:10px;background:#0f1524;border:1px solid var(--border);border-radius:999px;overflow:hidden;margin-top:8px}
+.progress>span{display:block;height:100%;background:var(--accent);transition:width .4s ease}
+.progress.warn>span{background:#ffb84d}
+.progress.critical>span{background:#ff5c5c}
+.progress.ok>span{background:var(--accent)}
+
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn.dynamic.ok{background:var(--accent-2,#19c37d);color:#0b0f1a;border-color:transparent}
+.btn.dynamic.warn{background:#ffb84d;color:#111;border-color:transparent}
+.btn.dynamic.critical{background:#ff5c5c;color:#111;border-color:transparent}
