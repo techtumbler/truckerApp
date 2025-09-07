@@ -7,8 +7,7 @@ import App from './App.jsx'
 import Timer from './routes/Timer.jsx'
 import Map from './routes/Map.jsx'
 import Docs from './routes/Docs.jsx'
-import Lsva from './routes/Lsva.jsx'
-// reimport to top up errror
+import Lsva from './routes/Lsva.jsx' //change main again
 
 const router = createBrowserRouter([
   { path: '/', element: <App/>, children: [
