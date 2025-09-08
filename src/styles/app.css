@@ -1,3 +1,4 @@
+/* ========== Design Tokens ========== */
 :root{
   --bg:#0b0f1a;
   --card:#121828;
@@ -6,55 +7,152 @@
   --accent:#ff7a00;
   --accent-2:#19c37d;
   --border:#1e293b;
+
+  /* Breakpoints */
+  --bp-mobile: 600px;     /* <600 = Phone */
+  --bp-tablet: 1024px;    /* 600–1023 = Tablet */
+  /* >=1024 = Desktop */
 }
+
+/* ========== Base ========== */
 *{box-sizing:border-box}
+html{scroll-behavior:smooth;}
 body{
   margin:0;
-  background:#0b0f1a;
+  background:var(--bg);
   color:var(--text);
   font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  line-height:1.55;
 }
-.container{width:min(1100px,100%);margin:0 auto;padding:20px}
-.nav{display:flex;gap:10px;padding:12px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#0b0f1a}
-.nav a{color:var(--muted);text-decoration:none;padding:8px 10px;border-radius:10px}
-.nav a.active,.nav a:hover{color:#111;background:var(--accent)}
-.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin:12px 0}
-.btn{display:inline-flex;gap:8px;align-items:center;padding:12px 16px;border-radius:12px;border:1px solid var(--border);color:var(--text);text-decoration:none;min-height:44px;font-size:1rem;line-height:1.2;background:#1a2336}
-.btn:hover{filter:brightness(1.06)}
-.btn:focus-visible{outline:3px solid #7fb3ff;outline-offset:2px}
-.btn.primary{background:var(--accent);color:#111;border-color:transparent}
-.btn.dynamic.ok{background:var(--accent-2);color:#0b0f1a;border-color:transparent}
-.btn.dynamic.warn{background:#ffb84d;color:#111;border-color:transparent}
-.btn.dynamic.critical{background:#ff5c5c;color:#111;border-color:transparent}
-h1,h2{margin:.4em 0}
+.container{width:min(1100px,100%);margin:0 auto;padding:16px}
 
-/* Timer Layout */
-.grid-2{display:grid;grid-template-columns:1fr;gap:12px}
-@media (min-width:840px){.grid-2{grid-template-columns:1fr 1fr}}
-.time{font-size:clamp(32px,8vw,44px);font-weight:800}
-.meta{opacity:.8;margin:6px 0}
-.badge{display:inline-block;padding:6px 12px;border-radius:999px;font-weight:700;font-size:.85rem}
-.badge.ok{background:var(--accent-2);color:#0b0f1a}
-.badge.warn{background:#ffb84d;color:#111}
-.badge.critical{background:#ff5c5c;color:#111;animation:pulse 1s infinite}
-.badge.muted{color:var(--muted);border:1px solid var(--border);background:transparent}
+/* ========== Navigation ========== */
+.nav{
+  display:flex; gap:10px; flex-wrap:wrap;
+  padding:12px 16px; border-bottom:1px solid var(--border);
+  position:sticky; top:0; background:var(--bg); z-index:10;
+}
+.nav a{
+  color:var(--muted); text-decoration:none; padding:10px 12px;
+  border-radius:10px; font-weight:600;
+}
+.nav a.active,.nav a:hover{color:#111;background:var(--accent)}
+
+/* Mobile: Nav dichter & ggf. scrollbar */
+@media (max-width: calc(var(--bp-mobile) - 1px)){
+  .nav{gap:8px; padding:10px 12px; overflow-x:auto}
+  .nav a{padding:8px 10px; white-space:nowrap}
+}
+
+/* ========== Cards & Buttons ========== */
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:16px;
+  margin:12px 0;
+}
+.btn{
+  display:inline-flex; gap:8px; align-items:center; justify-content:center;
+  padding:12px 16px; border-radius:12px; border:1px solid var(--border);
+  color:var(--text); text-decoration:none; min-height:44px;
+  font-size:1rem; line-height:1.2; background:#1a2336; cursor:pointer;
+}
+.btn:hover{filter:brightness(1.06)}
+.btn:focus-visible{outline:3px solid #7fb3ff; outline-offset:2px}
+.btn.primary{background:var(--accent); color:#111; border-color:transparent}
+.btn.dynamic.ok{background:var(--accent-2); color:#0b0f1a; border-color:transparent}
+.btn.dynamic.warn{background:#ffb84d; color:#111; border-color:transparent}
+.btn.dynamic.critical{background:#ff5c5c; color:#111; border-color:transparent}
+.btn-row{display:flex; gap:10px; flex-wrap:wrap}
+.btn-row .btn{flex:1 1 180px}
+
+/* Buttons/Typo fein abgestuft je Breakpoint */
+@media (max-width: calc(var(--bp-mobile) - 1px)){
+  .btn{min-height:48px; font-size:1.05rem}
+}
+@media (min-width: var(--bp-tablet)){
+  .btn{min-height:42px; font-size:.98rem}
+}
+
+/* ========== Headings ========== */
+h1{margin:.4em 0; font-size: clamp(20px, 4.5vw, 28px)}
+h2{margin:.4em 0; font-size: clamp(18px, 3.5vw, 22px)}
+
+/* ========== Timer Layout (responsive) ========== */
+.grid-2{
+  display:grid; gap:12px;
+  grid-template-columns: 1fr;           /* Phone: untereinander */
+}
+@media (min-width: var(--bp-mobile)){
+  .grid-2{ grid-template-columns: 1fr 1fr } /* Tablet: 2-spaltig */
+}
+@media (min-width: var(--bp-tablet)){
+  .grid-2{ gap:16px }                    /* Desktop: mehr Luft */
+}
+
+.time{font-size:clamp(30px, 7.5vw, 44px); font-weight:800}
+.meta{opacity:.8; margin:6px 0}
+.badge{
+  display:inline-block; padding:6px 12px; border-radius:999px;
+  font-weight:700; font-size:.9rem; margin-bottom:8px;
+}
+.badge.ok{background:var(--accent-2); color:#0b0f1a}
+.badge.warn{background:#ffb84d; color:#111}
+.badge.critical{background:#ff5c5c; color:#111; animation:pulse 1s infinite}
+.badge.muted{color:var(--muted); border:1px solid var(--border); background:transparent}
 @keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.05)}100%{transform:scale(1)}}
-.progress{position:relative;height:12px;background:#0f1524;border:1px solid var(--border);border-radius:999px;overflow:hidden;margin-top:8px}
-.progress>span{display:block;height:100%;background:var(--accent);transition:width .4s ease}
+
+.progress{
+  position:relative; height:12px; background:#0f1524;
+  border:1px solid var(--border); border-radius:999px; overflow:hidden; margin-top:8px;
+}
+.progress>span{display:block; height:100%; background:var(--accent); transition:width .4s ease}
 .progress.warn>span{background:#ffb84d}
 .progress.critical>span{background:#ff5c5c}
 .progress.ok>span{background:var(--accent-2)}
-.btn-row{display:flex;gap:10px;flex-wrap:wrap}
-.btn-row .btn{flex:1 1 160px}
 
-/* Map Styles */
-.map-layout{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+/* ========== Map Layout (mit einklappbarem Panel) ========== */
+.map-layout{
+  display:grid; gap:12px;
+  grid-template-columns: 1fr;           /* Phone: Panel unter der Karte (oder eingeklappt) */
+}
 .map-view{min-height:420px}
-.leaflet-container-custom{height:100%;min-height:420px;border:1px solid var(--border);border-radius:12px;overflow:hidden}
-.map-panel{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:600px;overflow:auto}
-.poi-list{list-style:none;margin:0;padding:0}
-.poi-list li{border-bottom:1px dashed var(--border);padding:8px 0}
-.poi-head{display:flex;align-items:center;justify-content:space-between}
+.leaflet-container-custom{
+  height:100%; min-height:420px; border:1px solid var(--border);
+  border-radius:12px; overflow:hidden;
+}
+
+/* Tablet: 2 Spalten (Karte + Panel) */
+@media (min-width: var(--bp-mobile)) and (max-width: calc(var(--bp-tablet) - 1px)){
+  .map-layout{ grid-template-columns: 3fr 2fr }
+}
+/* Desktop: 2 Spalten (breiter) */
+@media (min-width: var(--bp-tablet)){
+  .map-layout{ grid-template-columns: 2fr 1fr }
+}
+
+.map-panel{
+  background:var(--card); border:1px solid var(--border);
+  border-radius:12px; padding:12px; max-height:600px; overflow:auto;
+}
+.panel-toggle{
+  display:none;
+  margin:8px 0 12px 0;
+}
+/* Phone: Toggle sichtbar, Panel standardmäßig eingeklappt (über JS gesteuert) */
+@media (max-width: calc(var(--bp-mobile) - 1px)){
+  .panel-toggle{ display:block }
+}
+
+.poi-list{list-style:none; margin:0; padding:0}
+.poi-list li{border-bottom:1px dashed var(--border); padding:8px 0}
+.poi-head{display:flex; align-items:center; justify-content:space-between}
 .poi-meta{color:var(--muted)}
-.poi-geo{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;opacity:.7}
-@media (max-width:900px){.map-layout{grid-template-columns:1fr}}
+.poi-geo{
+  font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  opacity:.7
+}
+
+/* Dienst-Klassen */
+.hidden{display:none !important}

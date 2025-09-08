@@ -6,8 +6,11 @@ import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png'
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png'
 import { addPOI, listPOIs, removePOI, humanPOI } from '../lib/pois'
 
-// Fix Icons in Vite
-const DefaultIcon = L.icon({ iconUrl, iconRetinaUrl, shadowUrl, iconSize:[25,41], iconAnchor:[12,41], popupAnchor:[1,-34], shadowSize:[41,41] })
+// Leaflet Default Icon fix (Vite)
+const DefaultIcon = L.icon({
+  iconUrl, iconRetinaUrl, shadowUrl,
+  iconSize:[25,41], iconAnchor:[12,41], popupAnchor:[1,-34], shadowSize:[41,41]
+})
 L.Marker.prototype.options.icon = DefaultIcon
 
 export default function Map(){
@@ -16,6 +19,13 @@ export default function Map(){
   const [status, setStatus] = useState('initial')  // initial | ready | locating | error
   const [loc, setLoc] = useState(null)            // {lat, lon}
   const [pois, setPois] = useState([])
+  const [showPanel, setShowPanel] = useState(() => {
+    // Phones: Panel zu, Tablet/Desktop: Panel auf
+    if (typeof window !== 'undefined') {
+      return window.matchMedia('(min-width: 600px)').matches
+    }
+    return true
+  })
 
   // Map init
   useEffect(()=>{
@@ -25,14 +35,18 @@ export default function Map(){
       maxZoom: 19, attribution: '&copy; OpenStreetMap'
     }).addTo(leafletRef.current)
     setStatus('ready')
-    // Start Geoloc
     locate()
-    // Klick zum schnellen Hinzufügen
     leafletRef.current.on('click', async (e)=>{
       const { lat, lng } = e.latlng
       await quickAddAt(lat, lng)
     })
     refreshPOIs()
+
+    // Reagiere auf Resize: Panel automatisch öffnen/schließen bei BP-Wechsel
+    const mq = window.matchMedia('(min-width: 600px)')
+    const onChange = () => setShowPanel(mq.matches)
+    mq.addEventListener?.('change', onChange)
+    return ()=> mq.removeEventListener?.('change', onChange)
   }, [])
 
   async function locate(){
@@ -58,10 +72,9 @@ export default function Map(){
   async function refreshPOIs(){
     const data = await listPOIs()
     setPois(data)
-    // Marker neu zeichnen
     const m = leafletRef.current
     if(!m) return
-    // Clear existierende POI-Layer
+    // existierende POI-Layer (unsere) entfernen
     m.eachLayer(layer=>{
       if(layer._poi) m.removeLayer(layer)
     })
@@ -70,7 +83,7 @@ export default function Map(){
       mk._poi = true
       mk.bindPopup(`
         <div style="min-width:200px">
-          <strong>${escapeHtml(p.name||'Parkplatz')}</strong><br/>
+          <strong>${escapeHtml(p.name||'LKW-Parkplatz')}</strong><br/>
           <small>${humanPOI(p)}</small><br/>
           <small>${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}</small>
         </div>
@@ -78,28 +91,28 @@ export default function Map(){
     })
   }
 
-async function quickAddAt(lat, lon){
-  try{
-    const name = window.prompt('Name für Parkplatz/POI:', 'LKW-Parkplatz');
-    if(name===null) return;
-    const kosten = window.prompt('Kosten (leer/kostenlos/bezahlt):', '');
-    const wc = window.confirm('WC vorhanden? OK = Ja / Abbrechen = Nein');
-    const dusche = window.confirm('Dusche vorhanden? OK = Ja / Abbrechen = Nein');
+  async function quickAddAt(lat, lon){
+    try{
+      const name = window.prompt('Name für Parkplatz/POI:', 'LKW-Parkplatz')
+      if(name===null) return
+      const kosten = window.prompt('Kosten (leer/kostenlos/bezahlt):', '')
+      const wc = window.confirm('WC vorhanden? OK = Ja / Abbrechen = Nein')
+      const dusche = window.confirm('Dusche vorhanden? OK = Ja / Abbrechen = Nein')
 
-    // Sofort visuelles Feedback: Marker zeichnen
-    const mk = L.marker([lat, lon]).addTo(leafletRef.current);
-    mk._poi = true;
-    mk.bindPopup(`<div style="min-width:200px"><strong>${escapeHtml(name||'LKW-Parkplatz')}</strong><br/><small>${escapeHtml(kosten||'')}</small><br/><small>${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}</small></div>`);
+      // Sofort Marker
+      const mk = L.marker([lat, lon]).addTo(leafletRef.current)
+      mk._poi = true
+      mk.bindPopup(`<div style="min-width:200px"><strong>${escapeHtml(name||'LKW-Parkplatz')}</strong><br/><small>${escapeHtml(kosten||'')}</small><br/><small>${Number(lat).toFixed(5)}, ${Number(lon).toFixed(5)}</small></div>`)
 
-    await addPOI({ name, lat, lon, kosten: kosten||null, wc, dusche });
-    toast('✅ Parkplatz gespeichert');
-    refreshPOIs(); // Liste & Marker konsolidieren
-  }catch(err){
-    console.error('POI speichern fehlgeschlagen', err);
-    toast('❌ Konnte Parkplatz nicht speichern (siehe Konsole)');
+      await addPOI({ name, lat, lon, kosten: kosten||null, wc, dusche })
+      toast('✅ Parkplatz gespeichert')
+      refreshPOIs()
+      if (!showPanel) setShowPanel(true) // Panel auf, damit der Nutzer den Eintrag sieht
+    }catch(err){
+      console.error('POI speichern fehlgeschlagen', err)
+      toast('❌ Konnte Parkplatz nicht speichern (siehe Konsole)')
+    }
   }
-}
-
 
   function toast(msg){
     const el = document.createElement('div')
@@ -109,19 +122,27 @@ async function quickAddAt(lat, lon){
     setTimeout(()=> el.remove(), 2500)
   }
 
-  // einfache Escape für Popup
   function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' }[c])) }
 
   return (
     <section className="card">
       <h1>Parkplätze</h1>
-      <p style={{color:'var(--muted)'}}>Tippe in die Karte, um schnell einen Parkplatz als POI zu speichern. Standortfreigabe hilft, dich zu zentrieren. Die Karte dient später dazu Parkplätze zu finden</p>
+      <p style={{color:'var(--muted)'}}>Smartphone: Panel kann ein-/ausgeklappt werden. Tippe in die Karte, um schnell einen POI anzulegen.</p>
+
+      {/* Toggle nur auf Phones sichtbar (via CSS), sonst egal */}
+      <div className="panel-toggle">
+        <button className="btn" onClick={()=>setShowPanel(s=>!s)}>
+          {showPanel ? '⬇️ Panel einklappen' : '⬆️ Panel anzeigen'}
+        </button>
+      </div>
 
       <div className="map-layout">
         <div className="map-view">
           <div ref={mapRef} className="leaflet-container-custom" />
         </div>
-        <aside className="map-panel">
+
+        {/* Panel – auf Phone via Toggle ein-/ausblendbar */}
+        <aside className={`map-panel ${showPanel ? '' : 'hidden'}`}>
           <div className="btn-row">
             <button className="btn" onClick={locate}>📍 Standort</button>
             <button className="btn" onClick={refreshPOIs}>🔄 Aktualisieren</button>

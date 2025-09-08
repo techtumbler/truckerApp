@@ -80,7 +80,6 @@ export default function Timer(){
   }
 
   const s = status(st)
-
   const barClass = lvl => `progress ${lvl}`
   const primaryClass = lvl => `btn dynamic ${lvl}`
 
@@ -95,18 +94,14 @@ export default function Timer(){
   } else if (s.kind === 'driving') {
     primaryAction = (
       <div className="btn-row">
-        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')}>
-          ☕ Pause jetzt
-        </button>
+        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')}>☕ Pause jetzt</button>
         <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
       </div>
     )
   } else if (s.kind === 'break') {
     primaryAction = (
       <div className="btn-row">
-        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')}>
-          ▶️ Weiterfahren
-        </button>
+        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')}>▶️ Weiterfahren</button>
         <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
       </div>
     )
@@ -153,18 +148,6 @@ export default function Timer(){
         <div className="btn-row">
           <button className="btn" onClick={resetAll}>♻️ Zurücksetzen</button>
         </div>
-      </div>
-
-      <div className="card">
-        <h2>Protokoll (letzte 50)</h2>
-        <ul style={{margin:'8px 0', paddingLeft:'18px'}}>
-          {st.history.map((h,i)=>(
-            <li key={i}>
-              <code>{h.mode.toUpperCase()}</code> • {new Date(h.start).toLocaleString()} → {new Date(h.end).toLocaleString()} • {formatHMS(h.durationMs)}
-            </li>
-          ))}
-          {st.history.length===0 && <li>Kein Verlauf vorhanden.</li>}
-        </ul>
       </div>
     </section>
   )
