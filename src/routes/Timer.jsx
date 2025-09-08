@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState, useMemo } from 'react'
 import { loadTimer, saveTimer, defaultState, formatHMS, computeElapsed, status } from '../lib/timer'
 
 export default function Timer(){
   const [st, setSt] = useState(loadTimer())
+  const [filter, setFilter] = useState('all') // 'all' | 'today' | '24h' | '7d'
   const tickRef = useRef(null)
   const lastWarnRef = useRef({ m15:false, m5:false })
 
@@ -65,7 +66,6 @@ export default function Timer(){
   }
   function switchTo(newMode){
     if(st.mode==='idle'){ newMode==='driving' ? startDriving() : startBreak(); return }
-    // aktuellen Block abschließen → neuen starten
     closeCurrentToHistory(newMode)
     if(newMode==='driving'){ lastWarnRef.current = { m15:false, m5:false } }
   }
@@ -75,6 +75,28 @@ export default function Timer(){
     setSt(defaultState())
   }
 
+  // ===== Log-Filter =====
+  function inFilter(entry, kind){
+    const end = new Date(entry.end)
+    const now = new Date()
+    if(kind === 'today'){
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0,0,0,0)
+      return end >= startOfDay
+    }
+    if(kind === '24h'){
+      return (now - end) <= 24*60*60*1000
+    }
+    if(kind === '7d'){
+      return (now - end) <= 7*24*60*60*1000
+    }
+    return true // 'all'
+  }
+
+  const filteredHistory = useMemo(()=>{
+    return (st.history || []).filter(h => inFilter(h, filter))
+  }, [st.history, filter])
+
+  // ===== Darstellung =====
   const s = status(st)
   const barClass = lvl => `progress ${lvl}`
   const primaryClass = lvl => `btn dynamic ${lvl}`
@@ -103,6 +125,9 @@ export default function Timer(){
     )
   }
 
+  const fmtDT = (iso)=> new Date(iso).toLocaleString()
+  const modeBadge = (m)=> <span className={`chip ${m==='driving'?'chip-drive':'chip-break'}`}>{m==='driving'?'FAHRT':'PAUSE'}</span>
+
   return (
     <section className="card">
       <h1>Pausen-Timer</h1>
@@ -129,7 +154,7 @@ export default function Timer(){
           <div className={`badge ${s.kind==='break' ? (s.done ? 'ok' : 'warn') : 'muted'}`}>
             {s.kind==='break' ? (s.done ? 'OK' : 'Noch') : 'Bereit'}
           </div>
-        <div className="time">{formatHMS(st.mode==='break' ? st.elapsedMs : 0)}</div>
+          <div className="time">{formatHMS(st.mode==='break' ? st.elapsedMs : 0)}</div>
           <div className="meta">
             Ziel: <strong>00:45:00</strong>{s.kind==='break' && !s.done ? <> • Rest: <strong>{formatHMS(s.left)}</strong></> : null}
           </div>
@@ -148,17 +173,39 @@ export default function Timer(){
         </div>
       </div>
 
-      {/* Protokoll / Fahrten-Log */}
+      {/* Protokoll / Fahrten-Log mit Filter */}
       <div className="card">
-        <h2>Protokoll (letzte 50)</h2>
-        <ul style={{margin:'8px 0', paddingLeft:'18px'}}>
-          {st.history.map((h,i)=>(
-            <li key={i}>
-              <code>{h.mode.toUpperCase()}</code> • {new Date(h.start).toLocaleString()} → {new Date(h.end).toLocaleString()} • {formatHMS(h.durationMs)}
-            </li>
+        <div className="log-head">
+          <h2>Protokoll</h2>
+          <div className="log-filters">
+            <button className={`btn ${filter==='all'?'primary':''}`} onClick={()=>setFilter('all')}>Alle</button>
+            <button className={`btn ${filter==='today'?'primary':''}`} onClick={()=>setFilter('today')}>Heute</button>
+            <button className={`btn ${filter==='24h'?'primary':''}`} onClick={()=>setFilter('24h')}>24 h</button>
+            <button className={`btn ${filter==='7d'?'primary':''}`} onClick={()=>setFilter('7d')}>7 Tage</button>
+          </div>
+        </div>
+
+        <div className="table">
+          <div className="table-head">
+            <div>Modus</div>
+            <div>Start</div>
+            <div>Ende</div>
+            <div>Dauer</div>
+          </div>
+
+          {filteredHistory.length === 0 && (
+            <div className="table-empty">Keine Einträge im gewählten Zeitraum.</div>
+          )}
+
+          {filteredHistory.map((h,i)=>(
+            <div className="table-row" key={i}>
+              <div className="col-mode">{modeBadge(h.mode)}</div>
+              <div className="col-dt">{fmtDT(h.start)}</div>
+              <div className="col-dt">{fmtDT(h.end)}</div>
+              <div className="col-dur"><code>{formatHMS(h.durationMs)}</code></div>
+            </div>
           ))}
-          {st.history.length===0 && <li><em>Noch kein Verlauf – Eintrag entsteht, wenn du „Stopp“ drückst oder zwischen Fahrt↔Pause wechselst.</em></li>}
-        </ul>
+        </div>
       </div>
     </section>
   )

@@ -156,3 +156,43 @@ h2{margin:.4em 0; font-size: clamp(18px, 3.5vw, 22px)}
 
 /* Dienst-Klassen */
 .hidden{display:none !important}
+
+/* ===== Log/History – Tabelle responsiv ===== */
+.log-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.log-filters{display:flex;gap:8px;flex-wrap:wrap}
+
+.table{width:100%;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#0f1524}
+.table-head,.table-row{
+  display:grid;grid-template-columns:140px 1fr 1fr 120px;gap:8px;align-items:center;
+}
+.table-head{
+  background:#121a2a;color:var(--muted);font-weight:700;padding:10px 12px;border-bottom:1px solid var(--border)
+}
+.table-row{padding:10px 12px;border-bottom:1px solid var(--border)}
+.table-row:last-child{border-bottom:none}
+.table-empty{padding:16px;color:var(--muted)}
+
+.col-mode{display:flex;align-items:center;gap:8px}
+.col-dt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.col-dur{font-weight:700}
+
+/* Chips/Batches für Modus */
+.chip{
+  display:inline-block;padding:6px 10px;border-radius:999px;font-weight:700;font-size:.85rem;border:1px solid var(--border)
+}
+.chip-drive{background:var(--accent);color:#111;border:0}
+.chip-break{background:#ffb84d;color:#111;border:0}
+
+/* Mobile: untereinander stapeln */
+@media (max-width: 600px){
+  .table-head{display:none}
+  .table-row{
+    grid-template-columns:1fr; gap:6px;
+    border-bottom:1px solid var(--border);
+    padding:12px;
+  }
+  .col-mode{order:1}
+  .col-dt:nth-of-type(2){order:2}
+  .col-dt:nth-of-type(3){order:3}
+  .col-dur{order:4}
+}
