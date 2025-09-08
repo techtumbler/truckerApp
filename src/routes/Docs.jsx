@@ -3,17 +3,13 @@ import { addFiles, listDocs, getDoc, removeDoc, updateNote, humanSize } from '..
 
 export default function Docs(){
   const [docs, setDocs] = useState([])
-  const [filterMonth, setFilterMonth] = useState('all') // 'all' | 'YYYY-MM'
-  const [preview, setPreview] = useState(null) // { id, url, name, type }
+  const [filterMonth, setFilterMonth] = useState('all')
+  const [preview, setPreview] = useState(null) // { id, url, name, type, isImage, isPDF }
   const fileRef = useRef(null)
   const noteRef = useRef(null)
 
   useEffect(()=>{ refresh() }, [])
-
-  async function refresh(){
-    const d = await listDocs()
-    setDocs(d)
-  }
+  async function refresh(){ setDocs(await listDocs()) }
 
   async function onPick(e){
     const files = Array.from(e.target.files || [])
@@ -39,39 +35,26 @@ export default function Docs(){
     await updateNote(id, next)
     refresh()
   }
-
   async function onDelete(id){
     if(!confirm('Dieses Dokument wirklich löschen?')) return
     await removeDoc(id)
     refresh()
   }
 
-  // Filter
   const monthOptions = useMemo(()=>{
     const keys = Array.from(new Set(docs.map(d=>d.monthKey))).sort().reverse()
     return keys
   }, [docs])
-
-  const filtered = useMemo(()=>{
-    return docs.filter(d => filterMonth==='all' ? true : d.monthKey===filterMonth)
-  }, [docs, filterMonth])
+  const filtered = useMemo(()=> docs.filter(d => filterMonth==='all' ? true : d.monthKey===filterMonth), [docs, filterMonth])
 
   return (
     <section className="card">
       <h1>Dokumente</h1>
       <p style={{color:'var(--muted)'}}>Fotos oder PDFs hinzufügen. Auf dem Smartphone öffnet sich die Kamera automatisch.</p>
 
-      {/* Upload */}
       <div className="card">
         <div className="docs-upload">
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*,application/pdf"
-            capture="environment"
-            multiple
-            onChange={onPick}
-          />
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" multiple onChange={onPick}/>
           <input ref={noteRef} className="input" type="text" placeholder="Optional: Notiz für diese Auswahl" />
         </div>
         <div className="btn-row">
@@ -80,7 +63,6 @@ export default function Docs(){
         </div>
       </div>
 
-      {/* Filter */}
       <div className="card">
         <div className="docs-filter">
           <label>Monat:</label>
@@ -92,7 +74,6 @@ export default function Docs(){
         </div>
       </div>
 
-      {/* Liste */}
       <div className="card">
         {filtered.length===0 ? (
           <div className="table-empty">Keine Dokumente im gewählten Zeitraum.</div>
@@ -125,7 +106,7 @@ export default function Docs(){
         )}
       </div>
 
-      {/* Vorschau-Modal */}
+      {/* Vorschau-Modal – skaliert mit 'contain' in den Viewport */}
       {preview && (
         <div className="modal" role="dialog" aria-modal="true" onClick={()=>{ URL.revokeObjectURL(preview.url); setPreview(null) }}>
           <div className="modal-body" onClick={(e)=>e.stopPropagation()}>
@@ -133,13 +114,21 @@ export default function Docs(){
               <strong>{preview.name}</strong>
               <button className="btn" onClick={()=>{ URL.revokeObjectURL(preview.url); setPreview(null) }}>Schließen</button>
             </div>
-            <div className="modal-content">
+            <div className="modal-content center">
               {preview.isImage ? (
-                <img src={preview.url} alt={preview.name} />
+                <img
+                  className="preview-media"
+                  src={preview.url}
+                  alt={preview.name}
+                />
               ) : preview.isPDF ? (
-                <iframe title="PDF Vorschau" src={preview.url} style={{width:'100%',height:'70vh',border:'0',background:'white'}} />
+                <iframe
+                  title="PDF Vorschau"
+                  src={preview.url}
+                  className="preview-frame"
+                />
               ) : (
-                <p>Dateityp wird nicht direkt angezeigt.</p>
+                <p>Dieser Dateityp kann nicht direkt angezeigt werden.</p>
               )}
             </div>
           </div>
