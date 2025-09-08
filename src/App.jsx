@@ -6,7 +6,7 @@ function TopNav(){
     <header className="topbar">
       <div className="container topbar-inner">
         <div className="brand">
-          <img src="/icons/logo.svg" alt="Trucker App" width="28" height="28" />
+          <img src="/icons/logo.png" alt="Trucker App" width="28" height="28" />
           <span>Trucker&nbsp;App</span>
         </div>
         <nav className="nav-top">
