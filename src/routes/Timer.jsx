@@ -6,21 +6,21 @@ export default function Timer(){
   const tickRef = useRef(null)
   const lastWarnRef = useRef({ m15:false, m5:false })
 
+  // Persist jede Änderung
   useEffect(()=>{ saveTimer(st) }, [st])
 
+  // 1s-Ticker
   useEffect(()=>{
     clearInterval(tickRef.current)
     tickRef.current = setInterval(()=>{
-      setSt(s => {
-        if(s.mode === 'driving' || s.mode === 'break'){
-          return { ...s, elapsedMs: computeElapsed(s.startedAt) }
-        }
-        return s
-      })
+      setSt(s => (s.mode==='driving' || s.mode==='break')
+        ? { ...s, elapsedMs: computeElapsed(s.startedAt) }
+        : s)
     }, 1000)
     return ()=> clearInterval(tickRef.current)
   }, [])
 
+  // Warnungen (Foreground)
   useEffect(()=>{
     const stat = status(st)
     if (stat.kind === 'driving') {
@@ -41,6 +41,7 @@ export default function Timer(){
     setTimeout(()=> el.remove(), 3200)
   }
 
+  // Aktionen
   function startDriving(){
     if(st.mode === 'driving') return
     lastWarnRef.current = { m15:false, m5:false }
@@ -50,30 +51,25 @@ export default function Timer(){
     if(st.mode === 'break') return
     setSt(s => ({ ...s, mode:'break', startedAt:new Date().toISOString(), elapsedMs:0 }))
   }
-  function switchTo(newMode){
-    if(st.mode !== 'idle'){
-      const end = new Date()
-      const dur = Math.max(0, end - new Date(st.startedAt))
-      setSt(s => ({
-        ...s,
-        history: [{ mode:s.mode, start:s.startedAt, end:end.toISOString(), durationMs:dur }, ...s.history].slice(0,50),
-        mode:'idle', startedAt:null, elapsedMs:0
-      }))
-      setTimeout(()=> { newMode === 'driving' ? startDriving() : startBreak() }, 0)
-    } else {
-      newMode === 'driving' ? startDriving() : startBreak()
-    }
-  }
-  function stopCurrent(){
+  function closeCurrentToHistory(nextMode='idle'){
     if(st.mode === 'idle') return
     const end = new Date()
     const dur = Math.max(0, end - new Date(st.startedAt))
     setSt(s => ({
       ...s,
       history: [{ mode:s.mode, start:s.startedAt, end:end.toISOString(), durationMs:dur }, ...s.history].slice(0,50),
-      mode:'idle', startedAt:null, elapsedMs:0
+      mode: nextMode==='idle' ? 'idle' : nextMode,
+      startedAt: nextMode==='idle' ? null : new Date().toISOString(),
+      elapsedMs: 0
     }))
   }
+  function switchTo(newMode){
+    if(st.mode==='idle'){ newMode==='driving' ? startDriving() : startBreak(); return }
+    // aktuellen Block abschließen → neuen starten
+    closeCurrentToHistory(newMode)
+    if(newMode==='driving'){ lastWarnRef.current = { m15:false, m5:false } }
+  }
+  function stopCurrent(){ closeCurrentToHistory('idle') }
   function resetAll(){
     if(!confirm('Timer wirklich zurücksetzen?')) return
     setSt(defaultState())
@@ -112,6 +108,7 @@ export default function Timer(){
       <h1>Pausen-Timer</h1>
       <p style={{color:'var(--muted)'}}>Hinweis: Richtwerte (kein Rechtsersatz). 4 h 30 min Fahren ⇒ 45 min Pause.</p>
 
+      {/* Fahr- und Pausenblock */}
       <div className="card grid-2">
         <div>
           <h2>Fahrt</h2>
@@ -132,7 +129,7 @@ export default function Timer(){
           <div className={`badge ${s.kind==='break' ? (s.done ? 'ok' : 'warn') : 'muted'}`}>
             {s.kind==='break' ? (s.done ? 'OK' : 'Noch') : 'Bereit'}
           </div>
-          <div className="time">{formatHMS(st.mode==='break' ? st.elapsedMs : 0)}</div>
+        <div className="time">{formatHMS(st.mode==='break' ? st.elapsedMs : 0)}</div>
           <div className="meta">
             Ziel: <strong>00:45:00</strong>{s.kind==='break' && !s.done ? <> • Rest: <strong>{formatHMS(s.left)}</strong></> : null}
           </div>
@@ -142,12 +139,26 @@ export default function Timer(){
         </div>
       </div>
 
+      {/* Aktionen */}
       <div className="card">
         <h2>Aktionen</h2>
         {primaryAction}
         <div className="btn-row">
           <button className="btn" onClick={resetAll}>♻️ Zurücksetzen</button>
         </div>
+      </div>
+
+      {/* Protokoll / Fahrten-Log */}
+      <div className="card">
+        <h2>Protokoll (letzte 50)</h2>
+        <ul style={{margin:'8px 0', paddingLeft:'18px'}}>
+          {st.history.map((h,i)=>(
+            <li key={i}>
+              <code>{h.mode.toUpperCase()}</code> • {new Date(h.start).toLocaleString()} → {new Date(h.end).toLocaleString()} • {formatHMS(h.durationMs)}
+            </li>
+          ))}
+          {st.history.length===0 && <li><em>Noch kein Verlauf – Eintrag entsteht, wenn du „Stopp“ drückst oder zwischen Fahrt↔Pause wechselst.</em></li>}
+        </ul>
       </div>
     </section>
   )
