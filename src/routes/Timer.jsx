@@ -6,10 +6,8 @@ export default function Timer(){
   const tickRef = useRef(null)
   const lastWarnRef = useRef({ m15:false, m5:false })
 
-  // persist
   useEffect(()=>{ saveTimer(st) }, [st])
 
-  // ticker
   useEffect(()=>{
     clearInterval(tickRef.current)
     tickRef.current = setInterval(()=>{
@@ -23,7 +21,6 @@ export default function Timer(){
     return ()=> clearInterval(tickRef.current)
   }, [])
 
-  // foreground toasts on thresholds
   useEffect(()=>{
     const stat = status(st)
     if (stat.kind === 'driving') {
@@ -39,12 +36,11 @@ export default function Timer(){
   function toast(msg){
     const el = document.createElement('div')
     el.textContent = msg
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:#ff7a00;color:#111;padding:10px 14px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.3);zIndex:9999;font-weight:600'
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:#ff7a00;color:#111;padding:10px 14px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.3);z-index:9999;font-weight:600'
     document.body.appendChild(el)
     setTimeout(()=> el.remove(), 3200)
   }
 
-  // Actions
   function startDriving(){
     if(st.mode === 'driving') return
     lastWarnRef.current = { m15:false, m5:false }
@@ -55,7 +51,6 @@ export default function Timer(){
     setSt(s => ({ ...s, mode:'break', startedAt:new Date().toISOString(), elapsedMs:0 }))
   }
   function switchTo(newMode){
-    // beendet aktuellen Block und startet den gewünschten
     if(st.mode !== 'idle'){
       const end = new Date()
       const dur = Math.max(0, end - new Date(st.startedAt))
@@ -86,11 +81,9 @@ export default function Timer(){
 
   const s = status(st)
 
-  // dynamische Klassen
   const barClass = lvl => `progress ${lvl}`
   const primaryClass = lvl => `btn dynamic ${lvl}`
 
-  // kontextabhängige Primary-Action
   let primaryAction = null
   if (s.kind === 'idle') {
     primaryAction = (
@@ -102,7 +95,7 @@ export default function Timer(){
   } else if (s.kind === 'driving') {
     primaryAction = (
       <div className="btn-row">
-        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')} title="Pausenmodus starten">
+        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')}>
           ☕ Pause jetzt
         </button>
         <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
@@ -111,7 +104,7 @@ export default function Timer(){
   } else if (s.kind === 'break') {
     primaryAction = (
       <div className="btn-row">
-        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')} title="Fahrt fortsetzen">
+        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')}>
           ▶️ Weiterfahren
         </button>
         <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
@@ -125,9 +118,8 @@ export default function Timer(){
       <p style={{color:'var(--muted)'}}>Hinweis: Richtwerte (kein Rechtsersatz). 4 h 30 min Fahren ⇒ 45 min Pause.</p>
 
       <div className="card grid-2">
-        {/* Fahrt */}
         <div>
-          <h2 style={{marginTop:0}}>Fahrt</h2>
+          <h2>Fahrt</h2>
           <div className={`badge ${s.kind==='driving' ? s.level : 'muted'}`}>
             {s.kind==='driving' ? (s.level==='critical' ? 'Kritisch' : s.level==='warn' ? 'Bald Pause' : 'OK') : 'Bereit'}
           </div>
@@ -140,9 +132,8 @@ export default function Timer(){
           </div>
         </div>
 
-        {/* Pause */}
         <div>
-          <h2 style={{marginTop:0}}>Pause</h2>
+          <h2>Pause</h2>
           <div className={`badge ${s.kind==='break' ? (s.done ? 'ok' : 'warn') : 'muted'}`}>
             {s.kind==='break' ? (s.done ? 'OK' : 'Noch') : 'Bereit'}
           </div>
@@ -157,7 +148,7 @@ export default function Timer(){
       </div>
 
       <div className="card">
-        <h2 style={{marginTop:0}}>Aktionen</h2>
+        <h2>Aktionen</h2>
         {primaryAction}
         <div className="btn-row">
           <button className="btn" onClick={resetAll}>♻️ Zurücksetzen</button>
@@ -165,7 +156,7 @@ export default function Timer(){
       </div>
 
       <div className="card">
-        <h2 style={{marginTop:0}}>Protokoll (letzte 50)</h2>
+        <h2>Protokoll (letzte 50)</h2>
         <ul style={{margin:'8px 0', paddingLeft:'18px'}}>
           {st.history.map((h,i)=>(
             <li key={i}>
