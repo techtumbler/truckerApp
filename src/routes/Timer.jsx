@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react'
 import { loadTimer, saveTimer, defaultState, formatHMS, computeElapsed, status } from '../lib/timer'
+import { vibrate, vibratePattern } from '../lib/haptics'
 
 export default function Timer(){
   const [st, setSt] = useState(loadTimer())
   const [filter, setFilter] = useState('all') // 'all' | 'today' | '24h' | '7d'
   const tickRef = useRef(null)
   const lastWarnRef = useRef({ m15:false, m5:false })
+  const liveRef = useRef(null) // aria-live
 
-  // Persist jede Änderung
+  // Persist
   useEffect(()=>{ saveTimer(st) }, [st])
 
   // 1s-Ticker
@@ -21,35 +23,52 @@ export default function Timer(){
     return ()=> clearInterval(tickRef.current)
   }, [])
 
-  // Warnungen (Foreground)
+  // Warnungen (Foreground + Haptik)
   useEffect(()=>{
     const stat = status(st)
     if (stat.kind === 'driving') {
       if (st.warn15 && stat.left <= 15*60*1000 && !lastWarnRef.current.m15) {
-        lastWarnRef.current.m15 = true; toast('⚠️ Noch ~15 Min bis empfohlener Pause')
+        lastWarnRef.current.m15 = true; notify('⚠️ Noch ~15 Min bis empfohlener Pause'); vibrate(40)
       }
       if (st.warn5 && stat.left <= 5*60*1000 && !lastWarnRef.current.m5) {
-        lastWarnRef.current.m5 = true; toast('⏰ Noch ~5 Min bis empfohlener Pause')
+        lastWarnRef.current.m5 = true; notify('⏰ Noch ~5 Min bis empfohlener Pause'); vibratePattern([30, 60, 30])
       }
     }
   }, [st])
 
-  function toast(msg){
+  // Tastatur-Shortcuts: D/P/S
+  useEffect(()=>{
+    const onKey = (e)=>{
+      if (e.target && /input|textarea|select/.test(e.target.tagName.toLowerCase())) return
+      if (e.key.toLowerCase() === 'd') { e.preventDefault(); s.kind==='break' ? switchTo('driving') : startDriving() }
+      if (e.key.toLowerCase() === 'p') { e.preventDefault(); s.kind==='driving' ? switchTo('break') : startBreak() }
+      if (e.key.toLowerCase() === 's') { e.preventDefault(); stopCurrent() }
+    }
+    window.addEventListener('keydown', onKey)
+    return ()=> window.removeEventListener('keydown', onKey)
+  })
+
+  function notify(msg){
+    // visuelles Toast
     const el = document.createElement('div')
     el.textContent = msg
-    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;background:#ff7a00;color:#111;padding:10px 14px;border-radius:12px;box-shadow:0 6px 18px rgba(0,0,0,.3);z-index:9999;font-weight:600'
+    el.className = 'toast'
     document.body.appendChild(el)
+    // aria-live
+    if (liveRef.current) liveRef.current.textContent = msg
     setTimeout(()=> el.remove(), 3200)
   }
 
   // Aktionen
   function startDriving(){
     if(st.mode === 'driving') return
+    vibrate(20)
     lastWarnRef.current = { m15:false, m5:false }
     setSt(s => ({ ...s, mode:'driving', startedAt:new Date().toISOString(), elapsedMs:0 }))
   }
   function startBreak(){
     if(st.mode === 'break') return
+    vibrate(20)
     setSt(s => ({ ...s, mode:'break', startedAt:new Date().toISOString(), elapsedMs:0 }))
   }
   function closeCurrentToHistory(nextMode='idle'){
@@ -65,17 +84,19 @@ export default function Timer(){
     }))
   }
   function switchTo(newMode){
+    vibrate(15)
     if(st.mode==='idle'){ newMode==='driving' ? startDriving() : startBreak(); return }
     closeCurrentToHistory(newMode)
     if(newMode==='driving'){ lastWarnRef.current = { m15:false, m5:false } }
   }
-  function stopCurrent(){ closeCurrentToHistory('idle') }
+  function stopCurrent(){ vibrate(10); closeCurrentToHistory('idle') }
   function resetAll(){
     if(!confirm('Timer wirklich zurücksetzen?')) return
+    vibrate(10)
     setSt(defaultState())
   }
 
-  // ===== Log-Filter =====
+  // Filter (Log)
   function inFilter(entry, kind){
     const end = new Date(entry.end)
     const now = new Date()
@@ -83,20 +104,12 @@ export default function Timer(){
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0,0,0,0)
       return end >= startOfDay
     }
-    if(kind === '24h'){
-      return (now - end) <= 24*60*60*1000
-    }
-    if(kind === '7d'){
-      return (now - end) <= 7*24*60*60*1000
-    }
-    return true // 'all'
+    if(kind === '24h'){ return (now - end) <= 24*60*60*1000 }
+    if(kind === '7d'){ return (now - end) <= 7*24*60*60*1000 }
+    return true
   }
+  const filteredHistory = useMemo(()=> (st.history || []).filter(h => inFilter(h, filter)), [st.history, filter])
 
-  const filteredHistory = useMemo(()=>{
-    return (st.history || []).filter(h => inFilter(h, filter))
-  }, [st.history, filter])
-
-  // ===== Darstellung =====
   const s = status(st)
   const barClass = lvl => `progress ${lvl}`
   const primaryClass = lvl => `btn dynamic ${lvl}`
@@ -105,22 +118,22 @@ export default function Timer(){
   if (s.kind === 'idle') {
     primaryAction = (
       <div className="btn-row">
-        <button className="btn primary" onClick={()=>startDriving()}>▶️ Fahrt starten</button>
-        <button className="btn" onClick={()=>startBreak()}>☕ Pause starten</button>
+        <button className="btn primary" onClick={()=>startDriving()} aria-label="Fahrt starten (Taste D)">▶️ Fahrt starten</button>
+        <button className="btn" onClick={()=>startBreak()} aria-label="Pause starten (Taste P)">☕ Pause starten</button>
       </div>
     )
   } else if (s.kind === 'driving') {
     primaryAction = (
       <div className="btn-row">
-        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')}>☕ Pause jetzt</button>
-        <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
+        <button className={primaryClass(s.level)} onClick={()=>switchTo('break')} aria-label="Jetzt Pause (Taste P)">☕ Pause jetzt</button>
+        <button className="btn" onClick={stopCurrent} aria-label="Stopp (Taste S)">⏹️ Stopp</button>
       </div>
     )
   } else if (s.kind === 'break') {
     primaryAction = (
       <div className="btn-row">
-        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')}>▶️ Weiterfahren</button>
-        <button className="btn" onClick={stopCurrent}>⏹️ Stopp</button>
+        <button className={primaryClass(s.level === 'ok' ? 'ok' : 'warn')} onClick={()=>switchTo('driving')} aria-label="Weiterfahren (Taste D)">▶️ Weiterfahren</button>
+        <button className="btn" onClick={stopCurrent} aria-label="Stopp (Taste S)">⏹️ Stopp</button>
       </div>
     )
   }
@@ -130,8 +143,11 @@ export default function Timer(){
 
   return (
     <section className="card">
+      {/* aria-live Region für Screenreader + ruhige Anzeige */}
+      <div aria-live="polite" aria-atomic="true" className="sr-live" ref={liveRef} />
+
       <h1>Pausen-Timer</h1>
-      <p style={{color:'var(--muted)'}}>Hinweis: Richtwerte (kein Rechtsersatz). 4 h 30 min Fahren ⇒ 45 min Pause.</p>
+      <p style={{color:'var(--muted)'}}>Tasten: <kbd>D</kbd> fahren • <kbd>P</kbd> Pause • <kbd>S</kbd> Stopp</p>
 
       {/* Fahr- und Pausenblock */}
       <div className="card grid-2">
@@ -177,11 +193,11 @@ export default function Timer(){
       <div className="card">
         <div className="log-head">
           <h2>Protokoll</h2>
-          <div className="log-filters">
-            <button className={`btn ${filter==='all'?'primary':''}`} onClick={()=>setFilter('all')}>Alle</button>
-            <button className={`btn ${filter==='today'?'primary':''}`} onClick={()=>setFilter('today')}>Heute</button>
-            <button className={`btn ${filter==='24h'?'primary':''}`} onClick={()=>setFilter('24h')}>24 h</button>
-            <button className={`btn ${filter==='7d'?'primary':''}`} onClick={()=>setFilter('7d')}>7 Tage</button>
+          <div className="log-filters" role="tablist" aria-label="Protokoll filtern">
+            <button className={`btn ${filter==='all'?'primary':''}`} onClick={()=>setFilter('all')} role="tab" aria-selected={filter==='all'}>Alle</button>
+            <button className={`btn ${filter==='today'?'primary':''}`} onClick={()=>setFilter('today')} role="tab" aria-selected={filter==='today'}>Heute</button>
+            <button className={`btn ${filter==='24h'?'primary':''}`} onClick={()=>setFilter('24h')} role="tab" aria-selected={filter==='24h'}>24 h</button>
+            <button className={`btn ${filter==='7d'?'primary':''}`} onClick={()=>setFilter('7d')} role="tab" aria-selected={filter==='7d'}>7 Tage</button>
           </div>
         </div>
 
@@ -200,8 +216,8 @@ export default function Timer(){
           {filteredHistory.map((h,i)=>(
             <div className="table-row" key={i}>
               <div className="col-mode">{modeBadge(h.mode)}</div>
-              <div className="col-dt">{fmtDT(h.start)}</div>
-              <div className="col-dt">{fmtDT(h.end)}</div>
+              <div className="col-dt">{new Date(h.start).toLocaleString()}</div>
+              <div className="col-dt">{new Date(h.end).toLocaleString()}</div>
               <div className="col-dur"><code>{formatHMS(h.durationMs)}</code></div>
             </div>
           ))}

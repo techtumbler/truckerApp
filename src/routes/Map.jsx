@@ -131,7 +131,12 @@ export default function Map(){
 
       {/* Toggle nur auf Phones sichtbar (via CSS), sonst egal */}
       <div className="panel-toggle">
-        <button className="btn" onClick={()=>setShowPanel(s=>!s)}>
+        <button
+          className="btn"
+          onClick={()=>setShowPanel(s=>!s)}
+          aria-expanded={showPanel}
+          aria-controls="mapSidePanel"
+        >
           {showPanel ? '⬇️ Panel einklappen' : '⬆️ Panel anzeigen'}
         </button>
       </div>
@@ -142,7 +147,7 @@ export default function Map(){
         </div>
 
         {/* Panel – auf Phone via Toggle ein-/ausblendbar */}
-        <aside className={`map-panel ${showPanel ? '' : 'hidden'}`}>
+        <aside id="mapSidePanel" className={`map-panel ${showPanel ? '' : 'hidden'}`}>
           <div className="btn-row">
             <button className="btn" onClick={locate}>📍 Standort</button>
             <button className="btn" onClick={refreshPOIs}>🔄 Aktualisieren</button>
