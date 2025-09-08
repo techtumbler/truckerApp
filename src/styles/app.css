@@ -277,3 +277,30 @@ h2{margin:.4em 0; font-size: clamp(18px, 3.5vw, 22px)}
 /* --- Safe Areas (Notch) --- */
 .app-shell{ padding-bottom: env(safe-area-inset-bottom, 0) }
 .topbar{ padding-top: env(safe-area-inset-top, 0) }
+
+/* ===== Documents ===== */
+.docs-upload{display:grid;grid-template-columns:1fr;gap:10px}
+.docs-upload input[type="file"]{display:none}
+.input,.select{
+  background:#0f1524; border:1px solid var(--border); border-radius:10px;
+  color:var(--text); padding:10px 12px; font-size:1rem; min-height:42px;
+}
+.docs-filter{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.docs-grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:600px){ .docs-grid{grid-template-columns:1fr 1fr} }
+@media (min-width:1024px){ .docs-grid{grid-template-columns:1fr 1fr 1fr} }
+
+.doc-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.doc-thumb{height:160px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#0f1524;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.doc-thumb img{width:100%;height:100%;object-fit:cover}
+.doc-pdf,.doc-file{font-weight:900;letter-spacing:.1em;opacity:.9}
+.doc-meta{display:flex;flex-direction:column;gap:4px}
+.doc-name{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.doc-sub{color:var(--muted);font-size:.9rem}
+.doc-note{background:#1a2336;border:1px solid var(--border);border-radius:8px;padding:6px 8px}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal-body{background:var(--card);border:1px solid var(--border);border-radius:12px;max-width:960px;width:92%;padding:12px}
+.modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.modal-content{max-height:78vh;overflow:auto;background:#0b0f1a;border-radius:8px;padding:8px}
+.muted{color:var(--muted)}
