@@ -1,24 +1,26 @@
 import { openDB } from 'idb'
 
-// DB-Version erhöhen: v3 bringt den 'docs'-Store
-export const dbp = openDB('trucker-db', 3, {
+// DB v4: adds 'docs' (v3) + 'folders' (v4)
+export const dbp = openDB('trucker-db', 4, {
   upgrade(db, oldVersion) {
-    // v0 -> v1
     if (oldVersion < 1) {
       db.createObjectStore('kv');
       db.createObjectStore('lsvaPeriods', { keyPath: 'id' });
       db.createObjectStore('lsvaDocs', { keyPath: 'id' });
     }
-    // v1 -> v2
     if (oldVersion < 2) {
       if (!db.objectStoreNames.contains('pois')) {
         db.createObjectStore('pois', { keyPath: 'id' });
       }
     }
-    // v2 -> v3  (NEU: docs)
     if (oldVersion < 3) {
       if (!db.objectStoreNames.contains('docs')) {
         db.createObjectStore('docs', { keyPath: 'id' });
+      }
+    }
+    if (oldVersion < 4) {
+      if (!db.objectStoreNames.contains('folders')) {
+        db.createObjectStore('folders', { keyPath: 'id' });
       }
     }
   }

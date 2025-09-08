@@ -6,22 +6,48 @@ const toMonthKey = (d=new Date()) => {
   return `${y}-${m}`
 }
 
+/* ------------ Folders ------------ */
+export async function listFolders(){
+  const db = await dbp
+  const all = await db.getAll('folders')
+  return all.sort((a,b)=> (a.name||'').localeCompare(b.name||''))
+}
+export async function addFolder(name){
+  const id = crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random())
+  const db = await dbp
+  await db.put('folders', { id, name, createdAt:new Date().toISOString() })
+  return id
+}
+export async function renameFolder(id, name){
+  const db = await dbp
+  const f = await db.get('folders', id)
+  if(!f) return
+  f.name = name
+  await db.put('folders', f)
+}
+export async function removeFolder(id){
+  const db = await dbp
+  await db.delete('folders', id)
+  // Alle Docs in diesen Ordner auf "ohne Ordner" setzen
+  const all = await db.getAll('docs')
+  const affected = all.filter(d=>d.folderId===id)
+  for(const d of affected){ d.folderId = null; await db.put('docs', d) }
+}
+
+/* ------------ Docs ------------ */
 export async function listDocs(){
   const db = await dbp
   const all = await db.getAll('docs')
   return all.sort((a,b)=> (b.createdAt||'').localeCompare(a.createdAt||''))
 }
-
 export async function getDoc(id){
   const db = await dbp
   return db.get('docs', id)
 }
-
 export async function removeDoc(id){
   const db = await dbp
   await db.delete('docs', id)
 }
-
 export async function updateNote(id, note){
   const db = await dbp
   const d = await db.get('docs', id)
@@ -30,11 +56,18 @@ export async function updateNote(id, note){
   await db.put('docs', d)
   return d
 }
-
-export async function addFiles(files, {note} = {}){
+export async function updateDocFolder(id, folderId){
+  const db = await dbp
+  const d = await db.get('docs', id)
+  if(!d) return
+  d.folderId = folderId || null
+  await db.put('docs', d)
+  return d
+}
+export async function addFiles(files, {note, folderId} = {}){
   const out = []
   for (const file of files) {
-    const rec = await makeRecordFromFile(file, note)
+    const rec = await makeRecordFromFile(file, note, folderId)
     const db = await dbp
     await db.put('docs', rec)
     out.push(rec.id)
@@ -42,15 +75,13 @@ export async function addFiles(files, {note} = {}){
   return out
 }
 
-// Helpers
-
-async function makeRecordFromFile(file, note){
+/* ------------ Helpers ------------ */
+async function makeRecordFromFile(file, note, folderId){
   const id = crypto?.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random())
   const now = new Date()
   const isImage = file.type.startsWith('image/')
   const isPDF = file.type === 'application/pdf'
   const thumbDataUrl = isImage ? await makeImageThumb(file) : null
-  // Wir speichern die Datei als Blob im Record (lokal, offline-fähig)
   const arrayBuf = await file.arrayBuffer()
   const blob = new Blob([arrayBuf], { type: file.type })
   return {
@@ -61,9 +92,10 @@ async function makeRecordFromFile(file, note){
     createdAt: now.toISOString(),
     monthKey: toMonthKey(now),
     note: note || '',
+    folderId: folderId || null,
     isImage, isPDF,
-    thumbDataUrl,   // Base64 für schnelle Liste
-    blob            // eigentlicher Inhalt
+    thumbDataUrl,
+    blob
   }
 }
 
