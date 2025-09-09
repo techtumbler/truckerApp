@@ -1,240 +1,507 @@
+// src/routes/Docs.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  addFiles, listDocs, getDoc, removeDoc, updateNote, updateDocFolder, humanSize,
-  listFolders, addFolder, renameFolder, removeFolder
+  addFiles, listDocs, listAllDocs, getDoc, removeDoc, updateDocFolder, humanSize,
+  listFolders, addFolder, renameFolder, removeFolder, moveFolder, folderPathParts
 } from '../lib/docs'
+import FolderTree from '../lib/FolderTree.jsx'
+import { zipDocs, downloadBlob, zipFolderDeep } from '../lib/zip'
 
-export default function Docs(){
+export default function Docs() {
+  // --- state ---
   const [docs, setDocs] = useState([])
   const [folders, setFolders] = useState([])
+  const [currentFolder, setCurrentFolder] = useState(null) // null = Root
   const [filterMonth, setFilterMonth] = useState('all')
-  const [filterFolder, setFilterFolder] = useState('all') // 'all' | folderId | 'none'
-  const [preview, setPreview] = useState(null) // { id, url, name, type, isImage, isPDF, zoom }
+  const [selectedDocs, setSelectedDocs] = useState(new Set())
+  const [showAll, setShowAll] = useState(false)
+  const [viewMode, setViewMode] = useState('grid') // 'grid' | 'list'
+  const [preview, setPreview] = useState(null)
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
+  const [flash, setFlash] = useState(null)
+  const [busy, setBusy] = useState(false)
+
   const fileRef = useRef(null)
-  const noteRef = useRef(null)
-  const folderSelectRef = useRef(null)
 
-  useEffect(()=>{ refresh() }, [])
-  async function refresh(){
-    setDocs(await listDocs())
-    setFolders(await listFolders())
-  }
-
-  async function onPick(e){
-    const files = Array.from(e.target.files || [])
-    if(files.length===0) return
-    const note = noteRef.current?.value || ''
-    const folderId = folderSelectRef.current?.value && folderSelectRef.current.value!=='all' ? folderSelectRef.current.value : null
-    await addFiles(files, { note, folderId })
-    e.target.value = ''
-    if(noteRef.current) noteRef.current.value = ''
-    await refresh()
+  // --- helpers ---
+  function notify(msg) {
+    setFlash(msg)
+    if (navigator?.vibrate) navigator.vibrate(8)
+    window.setTimeout(() => setFlash(null), 2200)
   }
 
-  async function openPreview(id){
-    const rec = await getDoc(id)
-    if(!rec) return
-    const url = URL.createObjectURL(rec.blob)
-    setPreview({ id: rec.id, url, name: rec.name, type: rec.type, isImage: rec.isImage, isPDF: rec.isPDF, zoom: 1 })
-  }
+  const breadcrumb = useMemo(() => {
+    const parts = folderPathParts(currentFolder, folders)
+    return parts.length ? parts.join(' / ') : 'Root'
+  }, [currentFolder, folders])
 
-  function closePreview(){
-    if(preview?.url) URL.revokeObjectURL(preview.url)
-    setPreview(null)
-  }
-
-  // Zoom controls (für Bilder; bei PDF disabled)
-  function zoomIn(){ setPreview(p => p ? { ...p, zoom: Math.min(4, (p.zoom||1) + 0.25) } : p) }
-  function zoomOut(){ setPreview(p => p ? { ...p, zoom: Math.max(0.25, (p.zoom||1) - 0.25) } : p) }
-  function zoomReset(){ setPreview(p => p ? { ...p, zoom: 1 } : p) }
-  function zoomFit(){ setPreview(p => p ? { ...p, zoom: 'fit' } : p) } // 'fit' = contain (CSS), sonst scale()
-
-  async function onEditNote(id){
-    const current = docs.find(d=>d.id===id)?.note || ''
-    const next = window.prompt('Notiz bearbeiten:', current)
-    if(next===null) return
-    await updateNote(id, next)
-    refresh()
-  }
-  async function onDelete(id){
-    if(!confirm('Dieses Dokument wirklich löschen?')) return
-    await removeDoc(id)
-    refresh()
-  }
-
-  async function onCreateFolder(){
-    const name = window.prompt('Neuer Ordnername:')
-    if(!name) return
-    await addFolder(name)
-    refresh()
-  }
-  async function onRenameFolder(id){
-    const current = folders.find(f=>f.id===id)?.name || ''
-    const name = window.prompt('Ordner umbenennen:', current)
-    if(name===null) return
-    await renameFolder(id, name)
-    refresh()
-  }
-  async function onRemoveFolder(id){
-    if(!confirm('Ordner löschen? (Dokumente bleiben erhalten)')) return
-    await removeFolder(id)
-    if(filterFolder===id) setFilterFolder('all')
-    refresh()
-  }
-  async function onMoveDoc(id){
-    const options = [{id:'none', name:'(Kein Ordner)'}, ...folders]
-    const names = options.map((o,i)=> `${i}: ${o.name}`).join('\n')
-    const pick = window.prompt(`Dokument verschieben in:\n${names}\n\nGib die Nummer ein:`,'0')
-    if(pick===null) return
-    const idx = parseInt(pick,10)
-    if(Number.isNaN(idx) || idx<0 || idx>=options.length) return
-    const folderId = options[idx].id==='none' ? null : options[idx].id
-    await updateDocFolder(id, folderId)
-    refresh()
-  }
-
-  // Filter
-  const monthOptions = useMemo(()=>{
-    const keys = Array.from(new Set(docs.map(d=>d.monthKey))).sort().reverse()
-    return keys
+  const monthOptions = useMemo(() => {
+    const keys = Array.from(new Set(docs.map(d => d.monthKey).filter(Boolean))).sort().reverse()
+    return ['all', ...keys]
   }, [docs])
 
-  const filtered = useMemo(()=>{
-    return docs.filter(d => {
-      const okMonth = filterMonth==='all' ? true : d.monthKey===filterMonth
-      const okFolder = filterFolder==='all' ? true : (filterFolder==='none' ? !d.folderId : d.folderId===filterFolder)
-      return okMonth && okFolder
+  // --- data ---
+  async function refresh() {
+    const fs = await listFolders()
+    setFolders(fs)
+
+    let list
+    if (showAll) {
+      list = await listAllDocs()
+    } else {
+      list = await listDocs({
+        folderId: currentFolder,
+        month: filterMonth === 'all' ? null : filterMonth
+      })
+    }
+    setDocs(list)
+    setSelectedDocs(sel => new Set([...sel].filter(id => list.some(d => d.id === id))))
+  }
+
+  useEffect(() => { refresh() }, [])
+  useEffect(() => { refresh() }, [currentFolder, filterMonth, showAll])
+
+  // Automatisch Liste aktivieren, wenn "Alle Dateien" an ist
+  useEffect(() => {
+    if (showAll && viewMode !== 'list') setViewMode('list')
+  }, [showAll, viewMode])
+
+  // --- upload core ---
+  async function uploadFiles(files, { toFolder = currentFolder } = {}) {
+    if (!files?.length) return
+    setBusy(true)
+    try {
+      await addFiles(files, { folderId: toFolder })
+      notify(`${files.length} Datei(en) hochgeladen`)
+      if (fileRef.current) fileRef.current.value = ''
+      await refresh()
+    } catch (e) {
+      alert('Upload fehlgeschlagen. ' + (e?.message || ''))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- input select (auto-upload) ---
+  async function onInputChange(e) {
+    const files = Array.from(e.target.files || [])
+    await uploadFiles(files)
+  }
+
+  // --- Dropzone (Gesamtbereich) ---
+  function onDragOver(e) { e.preventDefault(); setIsDraggingOver(true) }
+  function onDragLeave() { setIsDraggingOver(false) }
+  async function onDrop(e) {
+    e.preventDefault(); setIsDraggingOver(false)
+    const files = await extractFilesFromDataTransfer(e.dataTransfer)
+    if (files.length) await uploadFiles(files)
+  }
+
+  // rekursiver Ordner-Upload (sofern Browser kann), sonst fallback
+  async function extractFilesFromDataTransfer(dt) {
+    const out = []
+    if (dt.items && dt.items.length && dt.items[0]?.webkitGetAsEntry) {
+      const recurse = async (entry) => {
+        if (entry.isFile) {
+          await new Promise(res => entry.file(f => { out.push(f); res() }))
+        } else if (entry.isDirectory) {
+          const reader = entry.createReader()
+          const entries = await new Promise(res => reader.readEntries(res))
+          for (const e of entries) await recurse(e)
+        }
+      }
+      for (const it of dt.items) {
+        const entry = it.webkitGetAsEntry()
+        if (entry) await recurse(entry)
+      }
+    } else if (dt.files && dt.files.length) {
+      out.push(...Array.from(dt.files))
+    }
+    return out
+  }
+
+  // --- Preview ---
+  async function openPreview(id) {
+    const d = await getDoc(id)
+    const url = URL.createObjectURL(d.blob)
+    setPreview({
+      id: d.id, url, name: d.name, type: d.type, size: d.size,
+      isImage: d.type?.startsWith('image/'),
+      isPDF: d.type === 'application/pdf',
+      zoom: 1
     })
-  }, [docs, filterMonth, filterFolder])
+  }
+  function closePreview() { try { URL.revokeObjectURL(preview?.url) } catch {} ; setPreview(null) }
+  function zoomIn() { setPreview(p => ({ ...p, zoom: Math.min(6, (p.zoom || 1) + 0.2) })) }
+  function zoomOut() { setPreview(p => ({ ...p, zoom: Math.max(0.2, (p.zoom || 1) - 0.2) })) }
+  function zoomReset() { setPreview(p => ({ ...p, zoom: 1 })) }
+  function zoomFit() { setPreview(p => ({ ...p, zoom: 'fit' })) }
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') closePreview()
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomIn() }
+      if (e.key === '-') { e.preventDefault(); zoomOut() }
+      if (e.key === '0') { e.preventDefault(); zoomReset() }
+    }
+    if (preview) window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [preview])
+
+  // --- Ordner-Aktionen ---
+  async function newFolder() {
+    const name = prompt('Neuer Ordnername')
+    if (!name) return
+    await addFolder(name, currentFolder)
+    notify('Ordner erstellt'); refresh()
+  }
+  async function renameCur() {
+    if (currentFolder == null) return
+    const cur = folders.find(f => f.id === currentFolder)
+    const name = prompt('Neuer Name', cur?.name || '')
+    if (!name) return
+    await renameFolder(currentFolder, name)
+    notify('Ordner umbenannt'); refresh()
+  }
+  async function moveCur() {
+    if (currentFolder == null) return
+    const options = folders.filter(f => f.id !== currentFolder)
+    const pick = prompt('Ziel-Ordner ID (leer = Root)\n' + options.map(f => `${f.id}: ${f.name}`).join('\n'))
+    if (pick === null) return
+    const newParentId = pick.trim() === '' ? null : pick.trim()
+    try { await moveFolder(currentFolder, newParentId); notify('Ordner verschoben'); refresh() }
+    catch(e){ alert(e?.message || 'Verschieben nicht möglich.') }
+  }
+  async function deleteCur() {
+    if (currentFolder == null) return
+    if (!confirm('Ordner löschen? Nur möglich, wenn leer.')) return
+    try { await removeFolder(currentFolder); setCurrentFolder(null); notify('Ordner gelöscht'); refresh() }
+    catch(e){ alert(e?.message || 'Ordner nicht leer / hat Unterordner.') }
+  }
+
+  // --- DnD auf Baum (Docs/Folders) ---
+  async function onDropDocIds(folderId, ids) {
+    if (folderId == null) {
+      const ok = confirm('In Root verschieben? Dateien ohne Ordner werden im Root angezeigt.')
+      if (!ok) return
+    }
+    for (const id of ids) await updateDocFolder(id, folderId)
+    setSelectedDocs(new Set()); notify(`${ids.length} Datei(en) verschoben`); refresh()
+  }
+  async function onDropFiles(folderId, files) {
+    await uploadFiles(files, { toFolder: folderId })
+  }
+  async function onDropFolder(sourceFolderId, targetFolderId) {
+    try {
+      if (targetFolderId == null) {
+        const ok = confirm('Ordner in Root verschieben?')
+        if (!ok) return
+      }
+      await moveFolder(sourceFolderId, targetFolderId)
+      notify('Ordner verschoben'); refresh()
+    } catch (e) {
+      alert(e?.message || 'Ordner konnte nicht verschoben werden.')
+    }
+  }
+
+  // --- Auswahl-Aktionen ---
+  function onDragStartDoc(e, id) {
+    const ids = selectedDocs.size && selectedDocs.has(id) ? [...selectedDocs] : [id]
+    e.dataTransfer.setData('application/x-trucker-doc-ids', JSON.stringify(ids))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+  function toggleSel(id) {
+    setSelectedDocs(sel => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function selectAll() { setSelectedDocs(new Set(docs.map(d => d.id))) }
+  function clearSel() { setSelectedDocs(new Set()) }
+
+  async function deleteSelected() {
+    if (!selectedDocs.size) return
+    if (!confirm(`${selectedDocs.size} Datei(en) löschen?`)) return
+    for (const id of selectedDocs) await removeDoc(id)
+    clearSel(); notify('Auswahl gelöscht'); refresh()
+  }
+  async function moveSelected() {
+    if (!selectedDocs.size) return
+    const pick = prompt('Ziel-Ordner ID (leer = Root [Warnung])\n' + folders.map(f => `${f.id}: ${f.name}`).join('\n'))
+    if (pick === null) return
+    const folderId = pick.trim() === '' ? null : pick.trim()
+    if (folderId == null) {
+      const ok = confirm('In Root verschieben? Dateien ohne Ordner werden im Root angezeigt.')
+      if (!ok) return
+    }
+    for (const id of selectedDocs) await updateDocFolder(id, folderId)
+    clearSel(); notify('Auswahl verschoben'); refresh()
+  }
+  async function exportSelected() {
+    if (!selectedDocs.size) return
+    const list = docs.filter(d => selectedDocs.has(d.id))
+    const blob = await zipDocs(list, folders, { rootName: 'auswahl' })
+    downloadBlob(blob, `auswahl_${Date.now()}.zip`)
+    notify('ZIP erstellt')
+  }
+  async function exportCurrentFolder() {
+    const name = currentFolder == null ? 'Root' : (folders.find(f => f.id === currentFolder)?.name || 'export')
+    const blob = await zipFolderDeep(currentFolder, folders, { rootName: name })
+    downloadBlob(blob, `${name}.zip`)
+    notify('ZIP erstellt')
+  }
+
+  // ---- render helpers ----
+  const renderDocGridCard = (d) => {
+    const path = folderPathParts(d.folderId, folders).join(' / ')
+    const showThumb = !showAll && d.thumb // in „Alle Dateien“ keine Bildvorschau
+    return (
+      <article
+        key={d.id}
+        className={`file ${selectedDocs.has(d.id) ? 'sel' : ''}`}
+        draggable
+        onDragStart={(e) => onDragStartDoc(e, d.id)}
+      >
+        <div className="thumb" role="button" onClick={() => openPreview(d.id)}>
+          {showThumb ? <img src={d.thumb} alt="" /> : <span className="icon" aria-hidden>📄</span>}
+        </div>
+        <div className="meta">
+          <div className="name">
+            <input type="checkbox" checked={selectedDocs.has(d.id)} onChange={() => toggleSel(d.id)} />
+            <strong title={d.name}>{d.name}</strong>
+          </div>
+          <div className="sub">
+            <span>{humanSize(d.size)}</span>
+            <span>·</span>
+            <span>{new Date(d.created).toLocaleDateString()}</span>
+            {showAll && path && (<><span>·</span><span title={path}>{path}</span></>)}
+          </div>
+        </div>
+        <div className="actions">
+          <button className="btn sm" onClick={() => openPreview(d.id)}>Anzeigen</button>
+          <button className="btn sm" onClick={async () => {
+            const pick = prompt('Ziel-Ordner ID (leer = Root [Warnung])\n' + folders.map(f => `${f.id}: ${f.name}`).join('\n'))
+            if (pick === null) return
+            const folderId = pick.trim() === '' ? null : pick.trim()
+            if (folderId == null && !confirm('In Root verschieben?')) return
+            await updateDocFolder(d.id, folderId); notify('Datei verschoben'); refresh()
+          }}>Verschieben</button>
+          <button className="btn sm" onClick={async () => { if (confirm('Löschen?')) { await removeDoc(d.id); notify('Datei gelöscht'); refresh() } }}>Löschen</button>
+        </div>
+      </article>
+    )
+  }
+
+  const renderDocListRow = (d) => {
+    const path = folderPathParts(d.folderId, folders).join(' / ')
+    return (
+      <div
+        key={d.id}
+        className={`lrow ${selectedDocs.has(d.id) ? 'sel' : ''}`}
+        draggable
+        onDragStart={(e) => onDragStartDoc(e, d.id)}
+      >
+        <div className="cell name">
+          <input type="checkbox" checked={selectedDocs.has(d.id)} onChange={() => toggleSel(d.id)} />
+          <span className="icon" aria-hidden>📄</span>
+          <button className="linklike" onClick={() => openPreview(d.id)} title="Anzeigen">{d.name}</button>
+        </div>
+        <div className="cell size">{humanSize(d.size)}</div>
+        <div className="cell date">{new Date(d.created).toLocaleDateString()}</div>
+        <div className="cell path" title={path}>{path || '—'}</div>
+        <div className="cell actions">
+          <button className="btn xs" onClick={async () => {
+            const pick = prompt('Ziel-Ordner ID (leer = Root [Warnung])\n' + folders.map(f => `${f.id}: ${f.name}`).join('\n'))
+            if (pick === null) return
+            const folderId = pick.trim() === '' ? null : pick.trim()
+            if (folderId == null && !confirm('In Root verschieben?')) return
+            await updateDocFolder(d.id, folderId); notify('Datei verschoben'); refresh()
+          }}>Verschieben</button>
+          <button className="btn xs" onClick={async () => { if (confirm('Löschen?')) { await removeDoc(d.id); notify('Datei gelöscht'); refresh() } }}>Löschen</button>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <section className="card">
-      <h1>Dokumente</h1>
-      <p style={{color:'var(--muted)'}}>Fotos oder PDFs hinzufügen. Ordner helfen bei der Struktur (z. B. „Fahrzeug A“, „Belege“).</p>
-
-      {/* Upload + Ordnerzuordnung */}
-      <div className="card">
-        <div className="docs-upload">
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" multiple onChange={onPick}/>
-          <input ref={noteRef} className="input" type="text" placeholder="Optional: Notiz für diese Auswahl" />
-          <select ref={folderSelectRef} className="select">
-            <option value="all">(Ohne Ordner)</option>
-            {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
-        </div>
-        <div className="btn-row">
-          <button className="btn primary" onClick={()=>fileRef.current?.click()}>📷 Foto / 📄 Datei wählen</button>
-          <button className="btn" onClick={()=>{ if(noteRef.current) noteRef.current.value='' }}>Notiz leeren</button>
-          <button className="btn" onClick={onCreateFolder}>📁 Ordner anlegen</button>
-        </div>
-      </div>
-
-      {/* Filter */}
-      <div className="card">
-        <div className="docs-filter">
-          <label>Monat:</label>
-          <select className="select" value={filterMonth} onChange={e=>setFilterMonth(e.target.value)}>
-            <option value="all">Alle</option>
-            {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
-          </select>
-
-          <label>Ordner:</label>
-          <select className="select" value={filterFolder} onChange={e=>setFilterFolder(e.target.value)}>
-            <option value="all">Alle</option>
-            <option value="none">(Ohne Ordner)</option>
-            {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
-
-          <span className="muted">Anzahl: {filtered.length}</span>
+    <div className="docs-layout">
+      {/* Sidebar: Folder Tree */}
+      <aside className="card sidebar">
+        <div className="sidebar-head">
+          <h3>Ordner</h3>
+          <button className="btn outline" onClick={() => setCurrentFolder(null)} title="Root">⬆ Root</button>
         </div>
 
-        {/* Ordner-Management (klein) */}
-        {folders.length>0 && (
-          <div className="folders-inline">
-            {folders.map(f=>(
-              <span className="folder-chip" key={f.id} title="Ordner bearbeiten">
-                📁 {f.name}
-                <button className="chip-btn" onClick={()=>onRenameFolder(f.id)} title="Umbenennen">✏️</button>
-                <button className="chip-btn" onClick={()=>onRemoveFolder(f.id)} title="Löschen">🗑️</button>
-              </span>
-            ))}
+        <div className="mt-2">
+          <FolderTree
+            folders={folders}
+            selectedId={currentFolder}
+            onSelect={setCurrentFolder}
+            onDropDocIds={onDropDocIds}
+            onDropFiles={onDropFiles}
+            onDropFolder={onDropFolder}
+          />
+        </div>
+
+        <div className="mt-3 sidebar-actions">
+          <button className="btn ok" onClick={newFolder}>Neuer Ordner</button>
+          <button className="btn outline" onClick={renameCur} disabled={currentFolder == null}>Umbenennen</button>
+          <button className="btn outline" onClick={moveCur} disabled={currentFolder == null}>Verschieben</button>
+          <button className="btn outline" onClick={exportCurrentFolder}>Ordner als ZIP</button>
+          <button className="btn crit" onClick={deleteCur} disabled={currentFolder == null}>Löschen</button>
+        </div>
+      </aside>
+
+      {/* Main: Toolbar + Dropzone + Grid/List */}
+      <section
+        className={`card main dropzone ${isDraggingOver ? 'over' : ''}`}
+        onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+      >
+        {/* Drop-Overlay: Ablage-Ort klar zeigen */}
+        <div className={`dz-overlay ${isDraggingOver ? 'show' : ''}`}>
+          <div className="dz-box">
+            <div className="dz-title">Dateien hier ablegen</div>
+            <div className="dz-sub">Ziel: <strong>{breadcrumb}</strong></div>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Liste */}
-      <div className="card">
-        {filtered.length===0 ? (
-          <div className="table-empty">Keine Dokumente im gewählten Zeitraum/Ordner.</div>
+        {/* Status */}
+        <div className="screen-reader" aria-live="polite">{flash || ''}</div>
+        {flash && <div className="toast">{flash}</div>}
+
+        {/* Header */}
+        <header className="main-head">
+          <div className="path"><span className="crumb">{breadcrumb}</span></div>
+          <div className="filters">
+            <label>Monat</label>
+            <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)}>
+              {monthOptions.map(k => <option key={k} value={k}>{k === 'all' ? 'Alle' : k}</option>)}
+            </select>
+
+            <div className="view-toggle" role="tablist" aria-label="Darstellung">
+              <button
+                className={`seg ${viewMode === 'grid' ? 'active' : ''}`}
+                onClick={() => setViewMode('grid')}
+                role="tab" aria-selected={viewMode === 'grid'}
+              >Grid</button>
+              <button
+                className={`seg ${viewMode === 'list' ? 'active' : ''}`}
+                onClick={() => setViewMode('list')}
+                role="tab" aria-selected={viewMode === 'list'}
+              >Liste</button>
+            </div>
+
+            <label className="toggle-all">
+              <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
+              <span>Alle Dateien</span>
+            </label>
+
+            <button className="btn primary" onClick={() => fileRef.current?.click()} disabled={busy}>
+              {busy ? 'Lädt…' : 'Dateien wählen'}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*,.pdf"
+              multiple
+              onChange={onInputChange}
+              style={{ display: 'none' }}
+            />
+          </div>
+        </header>
+
+        {/* Aktionen */}
+        <div className="toolbar">
+          <button className="btn outline" onClick={selectAll} disabled={!docs.length}>Alle wählen</button>
+          <button className="btn outline" onClick={clearSel} disabled={!selectedDocs.size}>Auswahl aufheben</button>
+          <span className="badge">{selectedDocs.size} gewählt</span>
+          <div className="spacer" />
+          <button className="btn outline" onClick={moveSelected} disabled={!selectedDocs.size}>Verschieben</button>
+          <button className="btn outline" onClick={exportSelected} disabled={!selectedDocs.size}>ZIP</button>
+          <button className="btn crit" onClick={deleteSelected} disabled={!selectedDocs.size}>Löschen</button>
+        </div>
+
+        {/* Grid / List */}
+        {viewMode === 'grid' ? (
+          <div className="grid-files">
+            {docs.map(renderDocGridCard)}
+            {!docs.length && <div className="empty"><p>Keine Dokumente. Dateien wählen oder in den Bereich ziehen.</p></div>}
+          </div>
         ) : (
-          <div className="docs-grid">
-            {filtered.map(d=>(
-              <article className="doc-card" key={d.id}>
-                <div className="doc-thumb" onClick={()=>openPreview(d.id)} role="button" title="Vorschau öffnen">
-                  {d.isImage && d.thumbDataUrl ? (
-                    <img src={d.thumbDataUrl} alt={d.name} />
-                  ) : d.isPDF ? (
-                    <div className="doc-pdf">PDF</div>
-                  ) : (
-                    <div className="doc-file">FILE</div>
-                  )}
-                </div>
-                <div className="doc-meta">
-                  <div className="doc-name" title={d.name}>{d.name}</div>
-                  <div className="doc-sub">
-                    {new Date(d.createdAt).toLocaleString()} • {humanSize(d.size)}
-                    {d.folderId ? <> • 📁 {folders.find(f=>f.id===d.folderId)?.name || '—'}</> : <> • (ohne Ordner)</>}
-                  </div>
-                  {d.note ? <div className="doc-note">📝 {d.note}</div> : null}
-                </div>
-                <div className="btn-row">
-                  <button className="btn" onClick={()=>openPreview(d.id)}>👁️ Anzeigen</button>
-                  <button className="btn" onClick={()=>onEditNote(d.id)}>✏️ Notiz</button>
-                  <button className="btn" onClick={()=>onMoveDoc(d.id)}>🚚 Verschieben</button>
-                  <button className="btn" onClick={()=>onDelete(d.id)}>🗑️ Löschen</button>
-                </div>
-              </article>
-            ))}
+          <div className="list-files">
+            <div className="lhead">
+              <div className="cell name">Name</div>
+              <div className="cell size">Größe</div>
+              <div className="cell date">Datum</div>
+              <div className="cell path">Pfad</div>
+              <div className="cell actions">Aktionen</div>
+            </div>
+            <div className="lbody">
+              {docs.map(renderDocListRow)}
+              {!docs.length && <div className="empty"><p>Keine Dokumente.</p></div>}
+            </div>
           </div>
         )}
-      </div>
 
-      {/* Vorschau-Modal mit Zoom-Toolbar */}
-      {preview && (
-        <div className="modal" role="dialog" aria-modal="true" onClick={closePreview}>
-          <div className="modal-body" onClick={(e)=>e.stopPropagation()}>
-            <div className="modal-head">
-              <strong>{preview.name}</strong>
-              <div className="zoombar">
-                <button className="btn" onClick={zoomOut} disabled={preview.isPDF}>−</button>
-                <button className="btn" onClick={zoomIn} disabled={preview.isPDF}>+</button>
-                <button className="btn" onClick={zoomReset} disabled={preview.isPDF}>100%</button>
-                <button className="btn" onClick={zoomFit}>Einpassen</button>
-                <a className="btn" href={preview.url} target="_blank" rel="noreferrer">↗️ Neu öffnen</a>
-                <button className="btn" onClick={closePreview}>Schließen</button>
+        {/* Preview Modal */}
+        {preview && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closePreview}>
+            <div className="modal viewer" onClick={(e) => e.stopPropagation()}>
+              <header className="viewer-head">
+                <div className="vh-left">
+                  <strong className="vh-name" title={preview.name}>{preview.name}</strong>
+                  <span className="vh-chip">{preview.isPDF ? 'PDF' : (preview.isImage ? 'Bild' : (preview.type || 'Datei'))}</span>
+                  <span className="vh-sub">{humanSize(preview.size)}</span>
+                </div>
+                <div className="vh-actions">
+                  {!preview.isPDF && (
+                    <>
+                      <button className="btn" onClick={zoomOut}>−</button>
+                      <button className="btn" onClick={zoomIn}>+</button>
+                      <button className="btn" onClick={zoomReset}>100%</button>
+                      <button className="btn" onClick={zoomFit}>Einpassen</button>
+                    </>
+                  )}
+                  <a className="btn" href={preview.url} download={preview.name}>Download</a>
+                  <a className="btn" href={preview.url} target="_blank" rel="noreferrer">Neu öffnen</a>
+                  <button className="btn" onClick={closePreview}>Schließen</button>
+                </div>
+              </header>
+              <div
+                className="viewer-scroller"
+                onDoubleClick={() => (preview.isPDF ? null : zoomIn())}
+                onWheel={(e) => {
+                  if (!preview?.isImage) return
+                  e.preventDefault()
+                  setPreview(p => ({ ...p, zoom: Math.max(0.2, Math.min(6, (p.zoom || 1) + (e.deltaY < 0 ? 0.1 : -0.1))) }))
+                }}
+              >
+                {preview.isImage && (
+                  <div className="image-center">
+                    <img
+                      src={preview.url}
+                      alt=""
+                      className="viewer-img"
+                      onError={() => setPreview(p => ({ ...p, isImage: false }))} /* Fallback */
+                      style={{
+                        transform: preview.zoom === 'fit' ? 'none' : `scale(${preview.zoom || 1})`
+                      }}
+                    />
+                  </div>
+                )}
+                {preview.isPDF && (
+                  <object data={preview.url} type="application/pdf" width="100%" height="100%">
+                    <p>PDF kann nicht angezeigt werden. <a href={preview.url} target="_blank" rel="noreferrer">Hier öffnen</a>.</p>
+                  </object>
+                )}
+                {!preview.isImage && !preview.isPDF && (
+                  <div className="other-preview">
+                    <div>Keine Vorschau verfügbar.</div>
+                    <a className="btn" href={preview.url} download={preview.name}>Download</a>
+                  </div>
+                )}
               </div>
             </div>
-            <div className="modal-content center">
-              {preview.isImage ? (
-                <img
-                  className={`preview-media ${preview.zoom==='fit' ? 'fit' : ''}`}
-                  src={preview.url}
-                  alt={preview.name}
-                  style={preview.zoom!=='fit' ? { transform:`scale(${preview.zoom||1})`, transformOrigin:'center center' } : undefined}
-                />
-              ) : preview.isPDF ? (
-                <iframe
-                  title="PDF Vorschau"
-                  src={preview.url}
-                  className="preview-frame"
-                />
-              ) : (
-                <p>Dieser Dateityp kann nicht direkt angezeigt werden.</p>
-              )}
-            </div>
           </div>
-        </div>
-      )}
-    </section>
+        )}
+      </section>
+    </div>
   )
 }

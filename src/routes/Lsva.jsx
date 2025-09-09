@@ -5,10 +5,23 @@ import { periodIdFrom, dueDateFor } from '../lib/dates'
 
 export default function Lsva(){
   const [period, setPeriod] = useState(null)
+
   useEffect(()=>{
     const id = periodIdFrom(new Date())
-    setPeriod({ id, dueDate: dueDateFor(id), status:'open', steps:{ readFromObu:false, cardToPC:false, submitToEZV:false, archiveProtocol:false }, docs:[] })
+    setPeriod({
+      id,
+      dueDate: dueDateFor(id),
+      status: 'open',
+      steps: {
+        emotach: false,
+        chipcardPC: false,
+        submitToEZV: false,
+        archiveProtocol: false
+      },
+      docs: []
+    })
   },[])
+
   if(!period) return null
   const due = new Date(period.dueDate).toLocaleDateString()
   return (
@@ -16,13 +29,12 @@ export default function Lsva(){
       <h1>LSVA-Helfer</h1>
       <p>Nächste Fälligkeit: <strong>{due}</strong> – Status: <strong>{period.status}</strong></p>
       <ul>
-        <li><input type="checkbox"/> Emotach auslesen</li>
-        <li><input type="checkbox"/> Chipkarte am PC einlesen</li>
-        <li><input type="checkbox"/> An EZV übermitteln</li>
-        <li><input type="checkbox"/> Protokoll archivieren</li>
+        <li><input type="checkbox" /> Emotach auslesen</li>
+        <li><input type="checkbox" /> Chipkarte am PC einlesen</li>
+        <li><input type="checkbox" /> An EZV übermitteln</li>
+        <li><input type="checkbox" /> Protokoll archivieren</li>
       </ul>
       <button className="btn primary">Dokument hinzufügen</button>
     </section>
   )
 }
-// new file
