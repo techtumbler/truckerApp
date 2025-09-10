@@ -20,6 +20,7 @@ export default function Docs() {
   const [isDraggingOver, setIsDraggingOver] = useState(false)
   const [flash, setFlash] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [showFolders, setShowFolders] = useState(false) // mobile drawer
 
   const fileRef = useRef(null)
 
@@ -320,20 +321,25 @@ export default function Docs() {
     )
   }
 
+  // ------ render ------
   return (
     <div className="docs-layout">
-      {/* Sidebar: Folder Tree */}
-      <aside className="card sidebar">
+      {/* Off-canvas Sidebar (mobile) */}
+      <div className={`drawer-backdrop ${showFolders ? 'open' : ''}`} onClick={()=>setShowFolders(false)} aria-hidden />
+      <aside className={`card sidebar drawer ${showFolders ? 'open' : ''}`} aria-label="Ordner">
         <div className="sidebar-head">
           <h3>Ordner</h3>
-          <button className="btn outline" onClick={() => setCurrentFolder(null)} title="Root">⬆ Root</button>
+          <div style={{display:'flex', gap:8}}>
+            <button className="btn outline sm" onClick={() => setCurrentFolder(null)} title="Root">⬆ Root</button>
+            <button className="btn outline sm show-mobile" onClick={()=>setShowFolders(false)}>Schließen</button>
+          </div>
         </div>
 
         <div className="mt-2">
           <FolderTree
             folders={folders}
             selectedId={currentFolder}
-            onSelect={setCurrentFolder}
+            onSelect={(id)=>{ setCurrentFolder(id); setShowFolders(false) }}
             onDropDocIds={onDropDocIds}
             onDropFiles={onDropFiles}
             onDropFolder={onDropFolder}
@@ -349,12 +355,12 @@ export default function Docs() {
         </div>
       </aside>
 
-      {/* Main: Toolbar + Dropzone + Grid/List */}
+      {/* Main */}
       <section
         className={`card main dropzone ${isDraggingOver ? 'over' : ''}`}
         onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
       >
-        {/* Drop-Overlay: Ablage-Ort klar zeigen */}
+        {/* Drop-Overlay */}
         <div className={`dz-overlay ${isDraggingOver ? 'show' : ''}`}>
           <div className="dz-box">
             <div className="dz-title">Dateien hier ablegen</div>
@@ -368,14 +374,17 @@ export default function Docs() {
 
         {/* Header */}
         <header className="main-head">
-          <div className="path"><span className="crumb">{breadcrumb}</span></div>
+          <div className="path">
+            <button className="btn outline sm show-mobile" onClick={()=>setShowFolders(true)}>☰ Ordner</button>
+            <span className="crumb">{breadcrumb}</span>
+          </div>
           <div className="filters">
             <label>Monat</label>
             <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)}>
               {monthOptions.map(k => <option key={k} value={k}>{k === 'all' ? 'Alle' : k}</option>)}
             </select>
 
-            <div className="view-toggle" role="tablist" aria-label="Darstellung">
+            <div className="view-toggle hide-mobile" role="tablist" aria-label="Darstellung">
               <button
                 className={`seg ${viewMode === 'grid' ? 'active' : ''}`}
                 onClick={() => setViewMode('grid')}
@@ -393,7 +402,7 @@ export default function Docs() {
               <span>Alle Dateien</span>
             </label>
 
-            <button className="btn primary" onClick={() => fileRef.current?.click()} disabled={busy}>
+            <button className="btn primary hide-mobile" onClick={() => fileRef.current?.click()} disabled={busy}>
               {busy ? 'Lädt…' : 'Dateien wählen'}
             </button>
             <input
@@ -401,14 +410,15 @@ export default function Docs() {
               type="file"
               accept="image/*,.pdf"
               multiple
+              capture="environment"
               onChange={onInputChange}
               style={{ display: 'none' }}
             />
           </div>
         </header>
 
-        {/* Aktionen */}
-        <div className="toolbar">
+        {/* Aktionen (Desktop) */}
+        <div className="toolbar hide-mobile">
           <button className="btn outline" onClick={selectAll} disabled={!docs.length}>Alle wählen</button>
           <button className="btn outline" onClick={clearSel} disabled={!selectedDocs.size}>Auswahl aufheben</button>
           <span className="badge">{selectedDocs.size} gewählt</span>
@@ -426,7 +436,7 @@ export default function Docs() {
           </div>
         ) : (
           <div className="list-files">
-            <div className="lhead">
+            <div className="lhead hide-mobile">
               <div className="cell name">Name</div>
               <div className="cell size">Größe</div>
               <div className="cell date">Datum</div>
@@ -479,10 +489,8 @@ export default function Docs() {
                       src={preview.url}
                       alt=""
                       className="viewer-img"
-                      onError={() => setPreview(p => ({ ...p, isImage: false }))} /* Fallback */
-                      style={{
-                        transform: preview.zoom === 'fit' ? 'none' : `scale(${preview.zoom || 1})`
-                      }}
+                      onError={() => setPreview(p => ({ ...p, isImage: false }))}
+                      style={{ transform: preview.zoom === 'fit' ? 'none' : `scale(${preview.zoom || 1})` }}
                     />
                   </div>
                 )}
@@ -501,6 +509,24 @@ export default function Docs() {
             </div>
           </div>
         )}
+
+        {/* FAB (Mobile Upload) */}
+        <button
+          className="fab show-mobile"
+          onClick={() => fileRef.current?.click()}
+          aria-label="Datei aufnehmen/hochladen"
+          disabled={busy}
+        >
+          ⊕
+        </button>
+
+        {/* Bottom action bar (Mobile) */}
+        <div className={`bottom-bar show-mobile ${selectedDocs.size ? 'show' : ''}`} aria-hidden={selectedDocs.size ? 'false' : 'true'}>
+          <span className="bb-count">{selectedDocs.size} gewählt</span>
+          <button className="btn outline sm" onClick={moveSelected} disabled={!selectedDocs.size}>Verschieben</button>
+          <button className="btn outline sm" onClick={exportSelected} disabled={!selectedDocs.size}>ZIP</button>
+          <button className="btn crit sm" onClick={deleteSelected} disabled={!selectedDocs.size}>Löschen</button>
+        </div>
       </section>
     </div>
   )
