@@ -510,15 +510,16 @@ export default function Docs() {
           </div>
         )}
 
-        {/* FAB (Mobile Upload) */}
-        <button
-          className="fab show-mobile"
-          onClick={() => fileRef.current?.click()}
-          aria-label="Datei aufnehmen/hochladen"
-          disabled={busy}
-        >
-          ⊕
-        </button>
+       {/* FAB (Mobile Upload) — ersetzt den bisherigen Button */}
+<button
+  className="fab show-mobile"
+  onClick={() => fileRef.current?.click()}
+  aria-label="Datei aufnehmen/hochladen"
+  disabled={busy}
+>
+  <span className="fab-plus" aria-hidden>+</span>
+</button>
+
 
         {/* Bottom action bar (Mobile) */}
         <div className={`bottom-bar show-mobile ${selectedDocs.size ? 'show' : ''}`} aria-hidden={selectedDocs.size ? 'false' : 'true'}>

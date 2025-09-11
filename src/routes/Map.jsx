@@ -13,14 +13,20 @@ const DefaultIcon = L.icon({
 })
 L.Marker.prototype.options.icon = DefaultIcon
 
+// Fallback-Center (wenn Geolocation geblockt/ohne HTTPS – iOS/Chrome)
+const FALLBACK_CENTER = [50.1109, 8.6821] // Frankfurt
+const FALLBACK_ZOOM = 6
+
 export default function Map(){
   const mapRef = useRef(null)
   const leafletRef = useRef(null)
+  const locationMarkerRef = useRef(null)
+  const resizeTimer = useRef(null)
+
   const [status, setStatus] = useState('initial')  // initial | ready | locating | error
   const [loc, setLoc] = useState(null)            // {lat, lon}
   const [pois, setPois] = useState([])
   const [showPanel, setShowPanel] = useState(() => {
-    // Phones: Panel zu, Tablet/Desktop: Panel auf
     if (typeof window !== 'undefined') {
       return window.matchMedia('(min-width: 600px)').matches
     }
@@ -30,26 +36,73 @@ export default function Map(){
   // Map init
   useEffect(()=>{
     if(leafletRef.current) return
-    leafletRef.current = L.map(mapRef.current, { zoomControl: true })
+
+    const map = L.map(mapRef.current, { zoomControl: true, attributionControl: true })
+    leafletRef.current = map
+
+    // Sofort eine sinnvolle Ansicht setzen (wichtig für iOS/Chrome)
+    map.setView(FALLBACK_CENTER, FALLBACK_ZOOM)
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap'
-    }).addTo(leafletRef.current)
+      maxZoom: 19, attribution: '&copy; OpenStreetMap', detectRetina: true
+    }).addTo(map)
+
     setStatus('ready')
-    locate()
-    leafletRef.current.on('click', async (e)=>{
+
+    // Nach dem Mount Größe neu berechnen (iOS WebKit Spezialität)
+    setTimeout(() => map.invalidateSize(), 0)
+
+    // Karte klicken → Quick-POI
+    map.on('click', async (e)=>{
       const { lat, lng } = e.latlng
       await quickAddAt(lat, lng)
     })
+
+    // Erste Daten malen
     refreshPOIs()
 
-    // Reagiere auf Resize: Panel automatisch öffnen/schließen bei BP-Wechsel
+    // Resize-Listener (debounced) → invalidateSize
+    const onWinResize = () => {
+      clearTimeout(resizeTimer.current)
+      resizeTimer.current = setTimeout(() => map.invalidateSize(), 120)
+    }
+    window.addEventListener('resize', onWinResize)
+
+    // MediaQuery für Panel-Auto (wie gehabt)
     const mq = window.matchMedia('(min-width: 600px)')
     const onChange = () => setShowPanel(mq.matches)
     mq.addEventListener?.('change', onChange)
-    return ()=> mq.removeEventListener?.('change', onChange)
+
+    return ()=>{
+      window.removeEventListener('resize', onWinResize)
+      mq.removeEventListener?.('change', onChange)
+      map.remove()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Panel-Toggle → Leaflet neu layouten (map.invalidateSize)
+  useEffect(() => {
+    const m = leafletRef.current
+    if (!m) return
+    const t = setTimeout(() => m.invalidateSize(), 120)
+    return () => clearTimeout(t)
+  }, [showPanel])
+
+  // On mount: versuchen zu lokalisieren (mit HTTPS-Check für iOS/Chrome)
+  useEffect(() => { locate() }, [])
+
   async function locate(){
+    const map = leafletRef.current
+    if (!map) return
+
+    const httpsOk = typeof window !== 'undefined' && window.location?.protocol === 'https:'
+    if (!httpsOk || !('geolocation' in navigator)) {
+      // Fallback-View beibehalten
+      setStatus('ready')
+      return
+    }
+
     try{
       setStatus('locating')
       const pos = await new Promise((resolve, reject)=>{
@@ -58,12 +111,22 @@ export default function Map(){
       const lat = pos.coords.latitude
       const lon = pos.coords.longitude
       setLoc({ lat, lon })
-      const m = leafletRef.current
-      m.setView([lat, lon], 14)
-      L.circleMarker([lat, lon], { radius: 6 }).addTo(m).bindTooltip('Dein Standort')
+
+      map.setView([lat, lon], 14)
+
+      // Standortmarker aktualisieren (alten entfernen)
+      if (locationMarkerRef.current) {
+        locationMarkerRef.current.remove()
+      }
+      const cm = L.circleMarker([lat, lon], { radius: 6 })
+        .addTo(map)
+        .bindTooltip('Dein Standort')
+      locationMarkerRef.current = cm
     }catch(err){
       console.warn('Geoloc failed', err)
       setStatus('error')
+      // Fallback-View, falls noch nicht gesetzt
+      if (!map._loaded) map.setView(FALLBACK_CENTER, FALLBACK_ZOOM)
     }finally{
       if(status!=='ready') setStatus('ready')
     }
@@ -86,9 +149,25 @@ export default function Map(){
           <strong>${escapeHtml(p.name||'LKW-Parkplatz')}</strong><br/>
           <small>${humanPOI(p)}</small><br/>
           <small>${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}</small>
+          <div style="margin-top:8px; display:flex; gap:6px;">
+            <button data-poi="${p.id}" class="poi-del" style="padding:4px 8px">Löschen</button>
+          </div>
         </div>
       `)
     })
+
+    // Delegation für Popup-Buttons (Löschen)
+    const container = m.getContainer()
+    const handler = (ev) => {
+      const t = ev.target
+      if (t && t.matches('button.poi-del')) {
+        const id = t.getAttribute('data-poi')
+        removePOI(id).then(refreshPOIs)
+        m.closePopup()
+      }
+    }
+    container.removeEventListener('click', handler) // doppelte Listener vermeiden
+    container.addEventListener('click', handler)
   }
 
   async function quickAddAt(lat, lon){
@@ -107,7 +186,7 @@ export default function Map(){
       await addPOI({ name, lat, lon, kosten: kosten||null, wc, dusche })
       toast('✅ Parkplatz gespeichert')
       refreshPOIs()
-      if (!showPanel) setShowPanel(true) // Panel auf, damit der Nutzer den Eintrag sieht
+      if (!showPanel) setShowPanel(true)
     }catch(err){
       console.error('POI speichern fehlgeschlagen', err)
       toast('❌ Konnte Parkplatz nicht speichern (siehe Konsole)')
@@ -143,7 +222,12 @@ export default function Map(){
 
       <div className="map-layout">
         <div className="map-view">
-          <div ref={mapRef} className="leaflet-container-custom" />
+          {/* Inline-Höhe als iOS-Fallback: 100dvh-Fix, falls globales CSS fehlt */}
+          <div
+            ref={mapRef}
+            className="leaflet-container-custom"
+            style={{ width:'100%', height: 'min(70vh, calc(100dvh - 200px))' }}
+          />
         </div>
 
         {/* Panel – auf Phone via Toggle ein-/ausblendbar */}
