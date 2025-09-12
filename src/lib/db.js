@@ -3,10 +3,10 @@
 import { openDB } from 'idb'
 
 export const DB_NAME = 'trucker-db'
-export const DB_VERSION = 6 // <- bump: erzwingt einmaliges Upgrade (additiv, non-destruktiv)
+export const DB_VERSION = 6 // additiv, non-destruktiv
 
-// ---- ensureStores: sorgt dafür, dass alle Stores/Indizes existieren (egal von welcher Altversion)
-function ensureStores(db) {
+// ---- ensureStores: alle Stores/Indizes anlegen oder nachziehen
+function ensureStores(db, tx) {
   // --- Key-Value ---
   if (!db.objectStoreNames.contains('kv')) {
     db.createObjectStore('kv')
@@ -16,17 +16,13 @@ function ensureStores(db) {
   if (!db.objectStoreNames.contains('lsvaPeriods')) {
     db.createObjectStore('lsvaPeriods', { keyPath: 'id' })
   }
-  if (!db.objectStoreNames.contains('lsvaDocs')) {
-    db.createObjectStore('lsvaDocs', { keyPath: 'id' })
-  }
 
   // --- POIs (v2) ---
   if (!db.objectStoreNames.contains('pois')) {
     const s = db.createObjectStore('pois', { keyPath: 'id' })
-    // Index nach Datum (für Sortierung/Filter)
     s.createIndex('byDate', 'created', { unique: false })
   } else {
-    const s = db.transaction.objectStore('pois')
+    const s = tx.objectStore('pois')
     if (!s.indexNames.contains('byDate')) s.createIndex('byDate', 'created', { unique: false })
   }
 
@@ -36,7 +32,7 @@ function ensureStores(db) {
     s.createIndex('byFolder', 'folderId', { unique: false })
     s.createIndex('byMonth', 'monthKey', { unique: false })
   } else {
-    const s = db.transaction.objectStore('docs')
+    const s = tx.objectStore('docs')
     if (!s.indexNames.contains('byFolder')) s.createIndex('byFolder', 'folderId', { unique: false })
     if (!s.indexNames.contains('byMonth')) s.createIndex('byMonth', 'monthKey', { unique: false })
   }
@@ -46,23 +42,18 @@ function ensureStores(db) {
     const s = db.createObjectStore('folders', { keyPath: 'id' })
     s.createIndex('byParent', 'parentId', { unique: false })
   } else {
-    const s = db.transaction.objectStore('folders')
+    const s = tx.objectStore('folders')
     if (!s.indexNames.contains('byParent')) s.createIndex('byParent', 'parentId', { unique: false })
   }
 }
 
-// Eine (lazy) DB-Instanz, die beim ersten Zugriff geöffnet wird
-export const dbp = (async () => {
-  const db = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db /*, oldVersion, newVersion, tx*/) {
-      // Wichtig: Wir migrieren minimal-invasiv und stellen am Ende alles sicher
-      ensureStores(db)
-    }
-  })
-  return db
-})()
+export const dbp = openDB(DB_NAME, DB_VERSION, {
+  upgrade(db, _oldVersion, _newVersion, tx) {
+    ensureStores(db, tx)
+  }
+})
 
-// ---- KV-Helpers (Kompatibilität zu import { kv } from '../lib/db')
+// ---- KV kompatibler Export (für Lsva.jsx & Co.)
 export async function kvGet(key) {
   const db = await dbp
   return db.get('kv', key)
@@ -75,10 +66,4 @@ export async function kvDel(key) {
   const db = await dbp
   return db.delete('kv', key)
 }
-
-// Optionaler kompatibler Namespace-Export (wie in deinem Projekt verwendet)
-export const kv = {
-  async get(k)  { return kvGet(k) },
-  async set(k,v){ return kvSet(k, v) },
-  async del(k)  { return kvDel(k) }
-}
+export const kv = { get: kvGet, set: kvSet, del: kvDel }

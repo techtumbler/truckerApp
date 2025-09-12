@@ -1,73 +1,95 @@
 // src/routes/Docs.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import {
-  addFiles, listDocs, listAllDocs, getDoc, removeDoc, updateDocFolder, humanSize,
-  listFolders, addFolder, renameFolder, removeFolder, moveFolder, folderPathParts
-} from '../lib/docs'
 import FolderTree from '../lib/FolderTree.jsx'
-import { zipDocs, downloadBlob, zipFolderDeep } from '../lib/zip'
+import {
+  addFiles,
+  listDocs,
+  listAllDocs,
+  getDoc,
+  removeDoc,
+  updateDocFolder,
+  humanSize,
+  listFolders,
+  addFolder,
+  renameFolder,
+  removeFolder,
+  moveFolder,
+  buildFolderTree,
+  folderPathParts, // ← nutzen wir (liefert Namen), IDs rekonstruieren wir unten
+} from '../lib/docs.js'
+import { zipDocs, zipFolderDeep, downloadBlob } from '../lib/zip.js'
+import { vibrate } from '../lib/haptics.js'
+
+// "Alle Dateien" pseudo-Folder-ID
+const ALL_FILES = '__ALL__'
 
 export default function Docs() {
-  // --- state ---
-  const [docs, setDocs] = useState([])
-  const [folders, setFolders] = useState([])
-  const [currentFolder, setCurrentFolder] = useState(null) // null = Root
-  const [filterMonth, setFilterMonth] = useState('all')
-  const [selectedDocs, setSelectedDocs] = useState(new Set())
-  const [showAll, setShowAll] = useState(false)
-  const [viewMode, setViewMode] = useState('grid') // 'grid' | 'list'
-  const [preview, setPreview] = useState(null)
-  const [isDraggingOver, setIsDraggingOver] = useState(false)
-  const [flash, setFlash] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [showFolders, setShowFolders] = useState(false) // mobile drawer
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
+  const [view, setView] = useState('grid') // 'grid' | 'list' (bei ALL_FILES forcieren wir 'list')
+  const [currentFolder, setCurrentFolder] = useState(null) // null = Root
+  const [folderTree, setFolderTree] = useState(null)
+  const [folders, setFolders] = useState([])
+  const [docs, setDocs] = useState([])
+  const [selectedDocs, setSelectedDocs] = useState(new Set())
+  const [showPanel, setShowPanel] = useState(true)
+  const [toastMsg, setToastMsg] = useState('')
+  const [preview, setPreview] = useState(null) // { id, url, name, type, size, isImage, isPDF, zoom }
 
   const fileRef = useRef(null)
+  const wrapRef = useRef(null)
 
-  // --- helpers ---
+  // aria-live toast
   function notify(msg) {
-    setFlash(msg)
-    if (navigator?.vibrate) navigator.vibrate(8)
-    window.setTimeout(() => setFlash(null), 2200)
+    setToastMsg(msg)
+    try { vibrate(18) } catch {}
+    setTimeout(() => setToastMsg(''), 1800)
   }
 
-  const breadcrumb = useMemo(() => {
-    const parts = folderPathParts(currentFolder, folders)
-    return parts.length ? parts.join(' / ') : 'Root'
-  }, [currentFolder, folders])
-
-  const monthOptions = useMemo(() => {
-    const keys = Array.from(new Set(docs.map(d => d.monthKey).filter(Boolean))).sort().reverse()
-    return ['all', ...keys]
-  }, [docs])
-
-  // --- data ---
+  // ===== Daten laden =====
   async function refresh() {
     const fs = await listFolders()
     setFolders(fs)
+    const tree = buildFolderTree(fs)
+    setFolderTree(tree)
 
-    let list
-    if (showAll) {
-      list = await listAllDocs()
+    if (currentFolder === ALL_FILES) {
+      const all = await listAllDocs()
+      setDocs(all)
     } else {
-      list = await listDocs({
-        folderId: currentFolder,
-        month: filterMonth === 'all' ? null : filterMonth
-      })
+      const list = await listDocs(currentFolder)
+      setDocs(list)
     }
-    setDocs(list)
-    setSelectedDocs(sel => new Set([...sel].filter(id => list.some(d => d.id === id))))
   }
 
-  useEffect(() => { refresh() }, [])
-  useEffect(() => { refresh() }, [currentFolder, filterMonth, showAll])
+  // Pfad/Title: Namen über folderPathParts, IDs via Rekonstruktion (Map chain)
+  const pathParts = useMemo(() => {
+    if (!folders || currentFolder == null) return []
+    // nutzt API (liefert string-Namen)
+    const _names = folderPathParts(currentFolder, folders)
+    // IDs + Namen rekonstruieren
+    const byId = new Map((folders || []).map(f => [f.id, f]))
+    const out = []
+    let cur = byId.get(currentFolder)
+    while (cur) {
+      out.unshift({ id: cur.id, name: cur.name || '' })
+      cur = cur.parentId != null ? byId.get(cur.parentId) : null
+    }
+    return out
+  }, [folders, currentFolder])
 
-  // Automatisch Liste aktivieren, wenn "Alle Dateien" an ist
-  useEffect(() => {
-    if (showAll && viewMode !== 'list') setViewMode('list')
-  }, [showAll, viewMode])
+  // ===== Auswahl-Logik =====
+  function toggleSelect(id) {
+    setSelectedDocs(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function clearSelection() { setSelectedDocs(new Set()) }
 
-  // --- upload core ---
+  // ===== Upload =====
   async function uploadFiles(files, { toFolder = currentFolder } = {}) {
     if (!files?.length) return
     setBusy(true)
@@ -83,54 +105,138 @@ export default function Docs() {
     }
   }
 
-  // --- input select (auto-upload) ---
+  // Safari-sicher: nutzt webkitGetAsEntry wenn vorhanden, sonst Fallback auf files
+  async function extractFilesFromDataTransfer(dt) {
+    const out = []
+    if (dt?.items && dt.items.length) {
+      const hasEntry = typeof dt.items[0].webkitGetAsEntry === 'function'
+      if (hasEntry) {
+        const walk = async (entry) => {
+          if (entry.isFile) {
+            await new Promise(res => entry.file(f => { out.push(f); res() }))
+          } else if (entry.isDirectory) {
+            const reader = entry.createReader()
+            while (true) {
+              const entries = await new Promise(res => reader.readEntries(res))
+              if (!entries.length) break
+              for (const e of entries) await walk(e)
+            }
+          }
+        }
+        for (const it of dt.items) {
+          const entry = it.webkitGetAsEntry && it.webkitGetAsEntry()
+          if (entry) await walk(entry)
+        }
+      }
+    }
+    if (!out.length && dt?.files && dt.files.length) {
+      return Array.from(dt.files)
+    }
+    return out
+  }
+
+  async function onRootDrop(e, toFolderId = currentFolder) {
+    e.preventDefault()
+    setIsDraggingOver(false)
+    try {
+      const files = await extractFilesFromDataTransfer(e.dataTransfer)
+      if (files?.length) {
+        await uploadFiles(files, { toFolder: toFolderId })
+        return
+      }
+      // ggf. Dokumente/Ordner verschieben (IDs im DataTransfer)
+      const idsRaw = e.dataTransfer.getData('application/x-doc-ids')
+      const folderIdRaw = e.dataTransfer.getData('application/x-folder-id')
+      if (idsRaw) {
+        const ids = JSON.parse(idsRaw)
+        if (toFolderId === null) {
+          if (!confirm('In die Root verschieben? Dateien ohne Ordner können schwer wiederzufinden sein.')) return
+        }
+        await Promise.all(ids.map(id => updateDocFolder(id, toFolderId ?? null)))
+        notify(`${ids.length} Datei(en) verschoben`)
+        await refresh()
+        clearSelection()
+      } else if (folderIdRaw) {
+        const movingId = folderIdRaw
+        if (toFolderId === movingId) return
+        if (toFolderId === null) {
+          if (!confirm('Ordner in die Root verschieben?')) return
+        }
+        await moveFolder(movingId, toFolderId ?? null)
+        notify('Ordner verschoben')
+        await refresh()
+      }
+    } catch (err) {
+      alert('Drop fehlgeschlagen: ' + (err?.message || 'Unbekannter Fehler'))
+    }
+  }
+
+  function onDragOver(e) { e.preventDefault(); setIsDraggingOver(true) }
+  function onDragLeave() { setIsDraggingOver(false) }
+  async function onDrop(e) { return onRootDrop(e, currentFolder) }
+
   async function onInputChange(e) {
     const files = Array.from(e.target.files || [])
     await uploadFiles(files)
   }
 
-  // --- Dropzone (Gesamtbereich) ---
-  function onDragOver(e) { e.preventDefault(); setIsDraggingOver(true) }
-  function onDragLeave() { setIsDraggingOver(false) }
-  async function onDrop(e) {
-    e.preventDefault(); setIsDraggingOver(false)
-    const files = await extractFilesFromDataTransfer(e.dataTransfer)
-    if (files.length) await uploadFiles(files)
+  // ===== Aktionen: ZIP, Löschen, Verschieben =====
+  async function exportSelected() {
+    if (!selectedDocs.size) return
+    const chosen = docs.filter(d => selectedDocs.has(d.id))
+    if (!chosen.length) return
+    notify('ZIP wird erstellt …')
+    const blob = await zipDocs(chosen)
+    downloadBlob(blob, 'auswahl.zip')
+    notify('ZIP erstellt')
   }
 
-  // rekursiver Ordner-Upload (sofern Browser kann), sonst fallback
-  async function extractFilesFromDataTransfer(dt) {
-    const out = []
-    if (dt.items && dt.items.length && dt.items[0]?.webkitGetAsEntry) {
-      const recurse = async (entry) => {
-        if (entry.isFile) {
-          await new Promise(res => entry.file(f => { out.push(f); res() }))
-        } else if (entry.isDirectory) {
-          const reader = entry.createReader()
-          const entries = await new Promise(res => reader.readEntries(res))
-          for (const e of entries) await recurse(e)
-        }
-      }
-      for (const it of dt.items) {
-        const entry = it.webkitGetAsEntry()
-        if (entry) await recurse(entry)
-      }
-    } else if (dt.files && dt.files.length) {
-      out.push(...Array.from(dt.files))
+  async function deleteSelected() {
+    if (!selectedDocs.size) return
+    const chosen = docs.filter(d => selectedDocs.has(d.id))
+    if (!chosen.length) return
+    if (!confirm(`${chosen.length} Datei(en) löschen?`)) return
+    await Promise.all(chosen.map(d => removeDoc(d.id)))
+    notify(`${chosen.length} gelöscht`)
+    await refresh()
+    clearSelection()
+  }
+
+  async function moveSelected() {
+    if (!selectedDocs.size) return
+    const to = prompt('Zielordner-ID (leer = Root):', currentFolder ?? '')
+    if (to === null) return
+    const dst = to === '' ? null : to
+    if (dst === null && !confirm('In die Root verschieben?')) return
+    await Promise.all(
+      Array.from(selectedDocs).map(id => updateDocFolder(id, dst))
+    )
+    notify(`${selectedDocs.size} verschoben`)
+    await refresh()
+    clearSelection()
+  }
+
+  async function exportFolderDeep() {
+    const folderId = currentFolder
+    if (!folderId && folderId !== null) return
+    const blob = await zipFolderDeep(folderId)
+    downloadBlob(blob, (folderId ? `ordner-${folderId}` : 'root') + '.zip')
+  }
+
+  // ===== Preview =====
+  async function openPreview(d) {
+    try {
+      const fileDoc = await getDoc(d.id)
+      const url = URL.createObjectURL(fileDoc.blob)
+      setPreview({
+        id: d.id, url, name: d.name, type: d.type, size: d.size,
+        isImage: d.type?.startsWith('image/'),
+        isPDF: d.type === 'application/pdf',
+        zoom: 1
+      })
+    } catch (e) {
+      alert('Vorschau nicht möglich.')
     }
-    return out
-  }
-
-  // --- Preview ---
-  async function openPreview(id) {
-    const d = await getDoc(id)
-    const url = URL.createObjectURL(d.blob)
-    setPreview({
-      id: d.id, url, name: d.name, type: d.type, size: d.size,
-      isImage: d.type?.startsWith('image/'),
-      isPDF: d.type === 'application/pdf',
-      zoom: 1
-    })
   }
   function closePreview() { try { URL.revokeObjectURL(preview?.url) } catch {} ; setPreview(null) }
   function zoomIn() { setPreview(p => ({ ...p, zoom: Math.min(6, (p.zoom || 1) + 0.2) })) }
@@ -149,258 +255,127 @@ export default function Docs() {
     return () => window.removeEventListener('keydown', onKey)
   }, [preview])
 
-  // --- Ordner-Aktionen ---
-  async function newFolder() {
-    const name = prompt('Neuer Ordnername')
-    if (!name) return
-    await addFolder(name, currentFolder)
-    notify('Ordner erstellt'); refresh()
-  }
-  async function renameCur() {
-    if (currentFolder == null) return
-    const cur = folders.find(f => f.id === currentFolder)
-    const name = prompt('Neuer Name', cur?.name || '')
-    if (!name) return
-    await renameFolder(currentFolder, name)
-    notify('Ordner umbenannt'); refresh()
-  }
-  async function moveCur() {
-    if (currentFolder == null) return
-    const options = folders.filter(f => f.id !== currentFolder)
-    const pick = prompt('Ziel-Ordner ID (leer = Root)\n' + options.map(f => `${f.id}: ${f.name}`).join('\n'))
-    if (pick === null) return
-    const newParentId = pick.trim() === '' ? null : pick.trim()
-    try { await moveFolder(currentFolder, newParentId); notify('Ordner verschoben'); refresh() }
-    catch(e){ alert(e?.message || 'Verschieben nicht möglich.') }
-  }
-  async function deleteCur() {
-    if (currentFolder == null) return
-    if (!confirm('Ordner löschen? Nur möglich, wenn leer.')) return
-    try { await removeFolder(currentFolder); setCurrentFolder(null); notify('Ordner gelöscht'); refresh() }
-    catch(e){ alert(e?.message || 'Ordner nicht leer / hat Unterordner.') }
+  // ===== Ordner-Wechsel =====
+  async function onSelectFolder(id) {
+    setCurrentFolder(id)
+    clearSelection()
   }
 
-  // --- DnD auf Baum (Docs/Folders) ---
-  async function onDropDocIds(folderId, ids) {
-    if (folderId == null) {
-      const ok = confirm('In Root verschieben? Dateien ohne Ordner werden im Root angezeigt.')
-      if (!ok) return
-    }
-    for (const id of ids) await updateDocFolder(id, folderId)
-    setSelectedDocs(new Set()); notify(`${ids.length} Datei(en) verschoben`); refresh()
-  }
-  async function onDropFiles(folderId, files) {
-    await uploadFiles(files, { toFolder: folderId })
-  }
-  async function onDropFolder(sourceFolderId, targetFolderId) {
-    try {
-      if (targetFolderId == null) {
-        const ok = confirm('Ordner in Root verschieben?')
-        if (!ok) return
-      }
-      await moveFolder(sourceFolderId, targetFolderId)
-      notify('Ordner verschoben'); refresh()
-    } catch (e) {
-      alert(e?.message || 'Ordner konnte nicht verschoben werden.')
-    }
-  }
+  // ===== Erst-Load + Reload bei currentFolder =====
+  useEffect(() => { refresh() }, [currentFolder])
 
-  // --- Auswahl-Aktionen ---
-  function onDragStartDoc(e, id) {
-    const ids = selectedDocs.size && selectedDocs.has(id) ? [...selectedDocs] : [id]
-    e.dataTransfer.setData('application/x-trucker-doc-ids', JSON.stringify(ids))
-    e.dataTransfer.effectAllowed = 'move'
-  }
-  function toggleSel(id) {
-    setSelectedDocs(sel => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
-  function selectAll() { setSelectedDocs(new Set(docs.map(d => d.id))) }
-  function clearSel() { setSelectedDocs(new Set()) }
+  // "Alle Dateien" → List erzwingen
+  const effectiveView = currentFolder === ALL_FILES ? 'list' : view
 
-  async function deleteSelected() {
-    if (!selectedDocs.size) return
-    if (!confirm(`${selectedDocs.size} Datei(en) löschen?`)) return
-    for (const id of selectedDocs) await removeDoc(id)
-    clearSel(); notify('Auswahl gelöscht'); refresh()
-  }
-  async function moveSelected() {
-    if (!selectedDocs.size) return
-    const pick = prompt('Ziel-Ordner ID (leer = Root [Warnung])\n' + folders.map(f => `${f.id}: ${f.name}`).join('\n'))
-    if (pick === null) return
-    const folderId = pick.trim() === '' ? null : pick.trim()
-    if (folderId == null) {
-      const ok = confirm('In Root verschieben? Dateien ohne Ordner werden im Root angezeigt.')
-      if (!ok) return
-    }
-    for (const id of selectedDocs) await updateDocFolder(id, folderId)
-    clearSel(); notify('Auswahl verschoben'); refresh()
-  }
-  async function exportSelected() {
-    if (!selectedDocs.size) return
-    const list = docs.filter(d => selectedDocs.has(d.id))
-    const blob = await zipDocs(list, folders, { rootName: 'auswahl' })
-    downloadBlob(blob, `auswahl_${Date.now()}.zip`)
-    notify('ZIP erstellt')
-  }
-  async function exportCurrentFolder() {
-    const name = currentFolder == null ? 'Root' : (folders.find(f => f.id === currentFolder)?.name || 'export')
-    const blob = await zipFolderDeep(currentFolder, folders, { rootName: name })
-    downloadBlob(blob, `${name}.zip`)
-    notify('ZIP erstellt')
-  }
-
-  // ---- render helpers ----
-  const renderDocGridCard = (d) => {
-    const path = folderPathParts(d.folderId, folders).join(' / ')
-    const showThumb = !showAll && d.thumb // in „Alle Dateien“ keine Bildvorschau
-    return (
-      <article
-        key={d.id}
-        className={`file ${selectedDocs.has(d.id) ? 'sel' : ''}`}
-        draggable
-        onDragStart={(e) => onDragStartDoc(e, d.id)}
-      >
-        <div className="thumb" role="button" onClick={() => openPreview(d.id)}>
-          {showThumb ? <img src={d.thumb} alt="" /> : <span className="icon" aria-hidden>📄</span>}
-        </div>
-        <div className="meta">
-          <div className="name">
-            <input type="checkbox" checked={selectedDocs.has(d.id)} onChange={() => toggleSel(d.id)} />
-            <strong title={d.name}>{d.name}</strong>
-          </div>
-          <div className="sub">
-            <span>{humanSize(d.size)}</span>
-            <span>·</span>
-            <span>{new Date(d.created).toLocaleDateString()}</span>
-            {showAll && path && (<><span>·</span><span title={path}>{path}</span></>)}
-          </div>
-        </div>
-        <div className="actions">
-          <button className="btn sm" onClick={() => openPreview(d.id)}>Anzeigen</button>
-          <button className="btn sm" onClick={async () => {
-            const pick = prompt('Ziel-Ordner ID (leer = Root [Warnung])\n' + folders.map(f => `${f.id}: ${f.name}`).join('\n'))
-            if (pick === null) return
-            const folderId = pick.trim() === '' ? null : pick.trim()
-            if (folderId == null && !confirm('In Root verschieben?')) return
-            await updateDocFolder(d.id, folderId); notify('Datei verschoben'); refresh()
-          }}>Verschieben</button>
-          <button className="btn sm" onClick={async () => { if (confirm('Löschen?')) { await removeDoc(d.id); notify('Datei gelöscht'); refresh() } }}>Löschen</button>
-        </div>
-      </article>
-    )
-  }
-
-  const renderDocListRow = (d) => {
-    const path = folderPathParts(d.folderId, folders).join(' / ')
-    return (
-      <div
-        key={d.id}
-        className={`lrow ${selectedDocs.has(d.id) ? 'sel' : ''}`}
-        draggable
-        onDragStart={(e) => onDragStartDoc(e, d.id)}
-      >
-        <div className="cell name">
-          <input type="checkbox" checked={selectedDocs.has(d.id)} onChange={() => toggleSel(d.id)} />
-          <span className="icon" aria-hidden>📄</span>
-          <button className="linklike" onClick={() => openPreview(d.id)} title="Anzeigen">{d.name}</button>
-        </div>
-        <div className="cell size">{humanSize(d.size)}</div>
-        <div className="cell date">{new Date(d.created).toLocaleDateString()}</div>
-        <div className="cell path" title={path}>{path || '—'}</div>
-        <div className="cell actions">
-          <button className="btn xs" onClick={async () => {
-            const pick = prompt('Ziel-Ordner ID (leer = Root [Warnung])\n' + folders.map(f => `${f.id}: ${f.name}`).join('\n'))
-            if (pick === null) return
-            const folderId = pick.trim() === '' ? null : pick.trim()
-            if (folderId == null && !confirm('In Root verschieben?')) return
-            await updateDocFolder(d.id, folderId); notify('Datei verschoben'); refresh()
-          }}>Verschieben</button>
-          <button className="btn xs" onClick={async () => { if (confirm('Löschen?')) { await removeDoc(d.id); notify('Datei gelöscht'); refresh() } }}>Löschen</button>
-        </div>
-      </div>
-    )
-  }
-
-  // ------ render ------
+  // ===== Rendering =====
   return (
-    <div className="docs-layout">
-      {/* Off-canvas Sidebar (mobile) */}
-      <div className={`drawer-backdrop ${showFolders ? 'open' : ''}`} onClick={()=>setShowFolders(false)} aria-hidden />
-      <aside className={`card sidebar drawer ${showFolders ? 'open' : ''}`} aria-label="Ordner">
-        <div className="sidebar-head">
-          <h3>Ordner</h3>
-          <div style={{display:'flex', gap:8}}>
-            <button className="btn outline sm" onClick={() => setCurrentFolder(null)} title="Root">⬆ Root</button>
-            <button className="btn outline sm show-mobile" onClick={()=>setShowFolders(false)}>Schließen</button>
-          </div>
-        </div>
+    <div className="docs-page">
+      <div className="drawer-toggle">
+        <button className="btn outline sm show-mobile" onClick={() => setShowPanel(s => !s)} aria-expanded={showPanel}>
+          ☰ Ordner
+        </button>
+      </div>
 
-        <div className="mt-2">
+      <aside className={`drawer ${showPanel ? 'open' : ''}`}>
+        {folderTree && (
           <FolderTree
-            folders={folders}
-            selectedId={currentFolder}
-            onSelect={(id)=>{ setCurrentFolder(id); setShowFolders(false) }}
-            onDropDocIds={onDropDocIds}
-            onDropFiles={onDropFiles}
-            onDropFolder={onDropFolder}
+            tree={folderTree}
+            current={currentFolder}
+            onSelect={onSelectFolder}
+            onDropDocs={(folderId, e) => onRootDrop(e, folderId)}
+            onDropFolder={(folderId, e) => onRootDrop(e, folderId)}
+            onRootDrop={(e) => onRootDrop(e, null)}
+            allowRootDrop
           />
-        </div>
+        )}
 
-        <div className="mt-3 sidebar-actions">
-          <button className="btn ok" onClick={newFolder}>Neuer Ordner</button>
-          <button className="btn outline" onClick={renameCur} disabled={currentFolder == null}>Umbenennen</button>
-          <button className="btn outline" onClick={moveCur} disabled={currentFolder == null}>Verschieben</button>
-          <button className="btn outline" onClick={exportCurrentFolder}>Ordner als ZIP</button>
-          <button className="btn crit" onClick={deleteCur} disabled={currentFolder == null}>Löschen</button>
+        <div className="folder-actions">
+          <button
+            className="btn sm"
+            onClick={async ()=>{
+              const name = prompt('Neuer Ordnername:')
+              if (name === null || !name.trim()) return
+              await addFolder({ name: name.trim(), parentId: currentFolder ?? null })
+              await refresh()
+            }}
+          >
+            + Ordner
+          </button>
+          <button
+            className="btn sm"
+            onClick={async ()=>{
+              if (!currentFolder) { alert('Für Umbenennen bitte einen Ordner wählen.'); return }
+              const name = prompt('Neuer Ordnername:')
+              if (name === null || !name.trim()) return
+              await renameFolder(currentFolder, name.trim())
+              await refresh()
+            }}
+          >
+            Umbenennen
+          </button>
+          <button
+            className="btn crit sm"
+            onClick={async ()=>{
+              if (!currentFolder) { alert('Root kann nicht gelöscht werden.'); return }
+              if (!confirm('Ordner wirklich löschen? (Inhalt bleibt erhalten, aber ohne Ordner)')) return
+              await removeFolder(currentFolder)
+              setCurrentFolder(null)
+              await refresh()
+            }}
+          >
+            Ordner löschen
+          </button>
+
+          <hr/>
+          <button
+            className="btn sm"
+            onClick={() => setCurrentFolder(ALL_FILES)}
+            aria-pressed={currentFolder === ALL_FILES}
+          >
+            Alle Dateien
+          </button>
+          <button
+            className="btn sm"
+            onClick={() => setCurrentFolder(null)}
+            aria-pressed={currentFolder === null}
+          >
+            Root
+          </button>
         </div>
       </aside>
 
-      {/* Main */}
       <section
-        className={`card main dropzone ${isDraggingOver ? 'over' : ''}`}
-        onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+        ref={wrapRef}
+        className={`docs-wrap ${isDraggingOver ? 'dropping' : ''}`}
+        onDragEnter={onDragOver}   // wichtig für Safari
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onDragLeave={onDragLeave}
+        aria-busy={busy ? 'true' : 'false'}
       >
-        {/* Drop-Overlay */}
-        <div className={`dz-overlay ${isDraggingOver ? 'show' : ''}`}>
-          <div className="dz-box">
-            <div className="dz-title">Dateien hier ablegen</div>
-            <div className="dz-sub">Ziel: <strong>{breadcrumb}</strong></div>
-          </div>
-        </div>
-
-        {/* Status */}
-        <div className="screen-reader" aria-live="polite">{flash || ''}</div>
-        {flash && <div className="toast">{flash}</div>}
-
-        {/* Header */}
-        <header className="main-head">
+        <header className="docs-header">
           <div className="path">
-            <button className="btn outline sm show-mobile" onClick={()=>setShowFolders(true)}>☰ Ordner</button>
-            <span className="crumb">{breadcrumb}</span>
+            <span className="crumb" role="link" tabIndex={0} onClick={()=>setCurrentFolder(null)}>Home</span>
+            {pathParts.map(p => (
+              <span key={p.id} className="crumb" role="link" tabIndex={0} onClick={()=>setCurrentFolder(p.id)}>{p.name}</span>
+            ))}
+            {currentFolder === ALL_FILES && <span className="crumb">Alle Dateien</span>}
           </div>
-          <div className="filters">
-            <label>Monat</label>
-            <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)}>
-              {monthOptions.map(k => <option key={k} value={k}>{k === 'all' ? 'Alle' : k}</option>)}
-            </select>
 
-            <div className="view-toggle hide-mobile" role="tablist" aria-label="Darstellung">
+          <div className="actions">
+            <div className="seg">
               <button
-                className={`seg ${viewMode === 'grid' ? 'active' : ''}`}
-                onClick={() => setViewMode('grid')}
-                role="tab" aria-selected={viewMode === 'grid'}
+                className={`seg-btn ${effectiveView==='grid' ? 'active' : ''}`}
+                onClick={()=>setView('grid')}
+                disabled={currentFolder === ALL_FILES}
+                aria-pressed={effectiveView === 'grid'}
               >Grid</button>
               <button
-                className={`seg ${viewMode === 'list' ? 'active' : ''}`}
-                onClick={() => setViewMode('list')}
-                role="tab" aria-selected={viewMode === 'list'}
+                className={`seg-btn ${effectiveView==='list' ? 'active' : ''}`}
+                onClick={()=>setView('list')}
+                aria-pressed={effectiveView === 'list'}
               >Liste</button>
             </div>
-
-            <label className="toggle-all">
-              <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
-              <span>Alle Dateien</span>
-            </label>
 
             <button className="btn primary hide-mobile" onClick={() => fileRef.current?.click()} disabled={busy}>
               {busy ? 'Lädt…' : 'Dateien wählen'}
@@ -417,109 +392,56 @@ export default function Docs() {
           </div>
         </header>
 
-        {/* Aktionen (Desktop) */}
-        <div className="toolbar hide-mobile">
-          <button className="btn outline" onClick={selectAll} disabled={!docs.length}>Alle wählen</button>
-          <button className="btn outline" onClick={clearSel} disabled={!selectedDocs.size}>Auswahl aufheben</button>
-          <span className="badge">{selectedDocs.size} gewählt</span>
-          <div className="spacer" />
-          <button className="btn outline" onClick={moveSelected} disabled={!selectedDocs.size}>Verschieben</button>
-          <button className="btn outline" onClick={exportSelected} disabled={!selectedDocs.size}>ZIP</button>
-          <button className="btn crit" onClick={deleteSelected} disabled={!selectedDocs.size}>Löschen</button>
-        </div>
-
-        {/* Grid / List */}
-        {viewMode === 'grid' ? (
-          <div className="grid-files">
-            {docs.map(renderDocGridCard)}
-            {!docs.length && <div className="empty"><p>Keine Dokumente. Dateien wählen oder in den Bereich ziehen.</p></div>}
-          </div>
-        ) : (
-          <div className="list-files">
-            <div className="lhead hide-mobile">
-              <div className="cell name">Name</div>
-              <div className="cell size">Größe</div>
-              <div className="cell date">Datum</div>
-              <div className="cell path">Pfad</div>
-              <div className="cell actions">Aktionen</div>
-            </div>
-            <div className="lbody">
-              {docs.map(renderDocListRow)}
-              {!docs.length && <div className="empty"><p>Keine Dokumente.</p></div>}
-            </div>
-          </div>
-        )}
-
-        {/* Preview Modal */}
-        {preview && (
-          <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={closePreview}>
-            <div className="modal viewer" onClick={(e) => e.stopPropagation()}>
-              <header className="viewer-head">
-                <div className="vh-left">
-                  <strong className="vh-name" title={preview.name}>{preview.name}</strong>
-                  <span className="vh-chip">{preview.isPDF ? 'PDF' : (preview.isImage ? 'Bild' : (preview.type || 'Datei'))}</span>
-                  <span className="vh-sub">{humanSize(preview.size)}</span>
-                </div>
-                <div className="vh-actions">
-                  {!preview.isPDF && (
-                    <>
-                      <button className="btn" onClick={zoomOut}>−</button>
-                      <button className="btn" onClick={zoomIn}>+</button>
-                      <button className="btn" onClick={zoomReset}>100%</button>
-                      <button className="btn" onClick={zoomFit}>Einpassen</button>
-                    </>
-                  )}
-                  <a className="btn" href={preview.url} download={preview.name}>Download</a>
-                  <a className="btn" href={preview.url} target="_blank" rel="noreferrer">Neu öffnen</a>
-                  <button className="btn" onClick={closePreview}>Schließen</button>
-                </div>
-              </header>
-              <div
-                className="viewer-scroller"
-                onDoubleClick={() => (preview.isPDF ? null : zoomIn())}
-                onWheel={(e) => {
-                  if (!preview?.isImage) return
-                  e.preventDefault()
-                  setPreview(p => ({ ...p, zoom: Math.max(0.2, Math.min(6, (p.zoom || 1) + (e.deltaY < 0 ? 0.1 : -0.1))) }))
-                }}
-              >
-                {preview.isImage && (
-                  <div className="image-center">
-                    <img
-                      src={preview.url}
-                      alt=""
-                      className="viewer-img"
-                      onError={() => setPreview(p => ({ ...p, isImage: false }))}
-                      style={{ transform: preview.zoom === 'fit' ? 'none' : `scale(${preview.zoom || 1})` }}
-                    />
-                  </div>
-                )}
-                {preview.isPDF && (
-                  <object data={preview.url} type="application/pdf" width="100%" height="100%">
-                    <p>PDF kann nicht angezeigt werden. <a href={preview.url} target="_blank" rel="noreferrer">Hier öffnen</a>.</p>
-                  </object>
-                )}
-                {!preview.isImage && !preview.isPDF && (
-                  <div className="other-preview">
-                    <div>Keine Vorschau verfügbar.</div>
-                    <a className="btn" href={preview.url} download={preview.name}>Download</a>
-                  </div>
-                )}
+        {/* Dropzone Overlay */}
+        {isDraggingOver && (
+          <div className="dropzone" role="region" aria-live="polite">
+            <div className="dz-inner">
+              <div className="dz-title">Dateien hier ablegen</div>
+              <div className="dz-sub">
+                Ziel: {currentFolder===ALL_FILES ? 'Alle Dateien' : (pathParts.map(p=>p.name).join(' / ') || 'Root')}
               </div>
             </div>
           </div>
         )}
 
-       {/* FAB (Mobile Upload) — ersetzt den bisherigen Button */}
-<button
-  className="fab show-mobile"
-  onClick={() => fileRef.current?.click()}
-  aria-label="Datei aufnehmen/hochladen"
-  disabled={busy}
->
-  <span className="fab-plus" aria-hidden>+</span>
-</button>
+        {/* Dateien */}
+        <div className={effectiveView==='grid' ? 'docs-grid' : 'docs-list'}>
+          {docs.map(d => (
+            <DocCard
+              key={d.id}
+              d={d}
+              view={effectiveView}
+              selected={selectedDocs.has(d.id)}
+              onSelect={() => toggleSelect(d.id)}
+              onOpen={() => openPreview(d)}
+              showThumb={currentFolder !== ALL_FILES} // in "Alle Dateien" keine Thumbs
+            />
+          ))}
+          {docs.length===0 && (
+            <div className="empty">
+              <p>Noch keine Dateien im Ordner.</p>
+            </div>
+          )}
+        </div>
 
+        {/* Aktionen (Desktop) */}
+        <div className="toolbar hide-mobile">
+          <button className="btn outline sm" onClick={moveSelected} disabled={!selectedDocs.size}>Verschieben</button>
+          <button className="btn outline sm" onClick={exportSelected} disabled={!selectedDocs.size}>ZIP</button>
+          <button className="btn crit sm" onClick={deleteSelected} disabled={!selectedDocs.size}>Löschen</button>
+          <div className="spacer" />
+          <button className="btn sm" onClick={exportFolderDeep} disabled={currentFolder===ALL_FILES}>Ordner als ZIP</button>
+        </div>
+
+        {/* FAB (Mobile Upload) */}
+        <button
+          className="fab show-mobile"
+          onClick={() => fileRef.current?.click()}
+          aria-label="Datei aufnehmen/hochladen"
+          disabled={busy}
+        >
+          <span className="fab-plus" aria-hidden>+</span>
+        </button>
 
         {/* Bottom action bar (Mobile) */}
         <div className={`bottom-bar show-mobile ${selectedDocs.size ? 'show' : ''}`} aria-hidden={selectedDocs.size ? 'false' : 'true'}>
@@ -529,6 +451,93 @@ export default function Docs() {
           <button className="btn crit sm" onClick={deleteSelected} disabled={!selectedDocs.size}>Löschen</button>
         </div>
       </section>
+
+      {/* aria-live Region */}
+      <div className="sr-only" aria-live="polite">{toastMsg}</div>
+
+      {/* Viewer */}
+      {preview && (
+        <div className="viewer" role="dialog" aria-modal="true" onClick={(e)=>{ if(e.target.classList.contains('viewer')) closePreview() }}>
+          <div className="viewer-inner">
+            <div className="viewer-bar">
+              <strong className="name">{preview.name}</strong>
+              <span className="meta">{preview.type} · {humanSize(preview.size)}</span>
+              <div className="spacer" />
+              <button className="btn sm" onClick={zoomFit}>Fit</button>
+              <button className="btn sm" onClick={zoomOut}>–</button>
+              <button className="btn sm" onClick={zoomIn}>+</button>
+              <button className="btn sm" onClick={zoomReset}>100%</button>
+              <a className="btn" href={preview.url} download={preview.name}>Download</a>
+              <button className="btn" onClick={closePreview}>Schliessen</button>
+            </div>
+            <div className={`viewer-body ${preview.isImage ? 'image' : preview.isPDF ? 'pdf' : 'other'}`}>
+              {preview.isImage && (
+                <img
+                  src={preview.url}
+                  alt={preview.name}
+                  style={{ transform: preview.zoom==='fit' ? 'none' : `scale(${preview.zoom || 1})` }}
+                  className={preview.zoom==='fit' ? 'fit' : ''}
+                  onDoubleClick={()=> setPreview(p => ({ ...p, zoom: p.zoom==='fit' ? 1 : 'fit' }))}
+                  onWheel={(e)=>{
+                    e.preventDefault()
+                    const dir = Math.sign(e.deltaY)
+                    setPreview(p => ({ ...p, zoom: Math.max(0.2, Math.min(6, (p.zoom || 1) + (dir<0 ? 0.1 : -0.1))) }))
+                  }}
+                />
+              )}
+              {preview.isPDF && (
+                <object data={preview.url} type="application/pdf" className="pdfobj">
+                  <p>PDF kann nicht angezeigt werden. <a href={preview.url} target="_blank" rel="noreferrer">Im neuen Tab öffnen</a></p>
+                </object>
+              )}
+              {!preview.isImage && !preview.isPDF && (
+                <p>Diese Datei kann hier nicht angezeigt werden. <a href={preview.url} target="_blank" rel="noreferrer">Öffnen</a></p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+function DocCard({ d, view, selected, onSelect, onOpen, showThumb }) {
+  const ext = (d.name.split('.').pop() || '').toLowerCase()
+  const isImage = d.type?.startsWith('image/')
+  const isPDF = d.type === 'application/pdf'
+
+  if (view === 'list') {
+    return (
+      <div className={`row ${selected?'sel':''}`} role="button" tabIndex={0} onClick={onSelect}>
+        <span className="col col-ico" aria-hidden>{currentIcon(showThumb, isImage, isPDF)}</span>
+        <span className="col col-name" onDoubleClick={(e)=>{ e.stopPropagation(); onOpen?.() }}>{d.name}</span>
+        <span className="col col-ext">{ext}</span>
+        <span className="col col-size">{humanSize(d.size)}</span>
+        <span className="col col-path">{d.path || d.folderPath || ''}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`card ${selected?'sel':''}`} role="button" tabIndex={0} onClick={onSelect}>
+      <div className="thumb" onDoubleClick={(e)=>{ e.stopPropagation(); onOpen?.() }}>
+        {showThumb && isImage && d.thumb ? (
+          <img src={d.thumb} alt="" loading="lazy" />
+        ) : (
+          <div className="ico">{currentIcon(showThumb, isImage, isPDF)}</div>
+        )}
+      </div>
+      <div className="meta">
+        <div className="name" title={d.name}>{d.name}</div>
+        <div className="sub">{humanSize(d.size)}</div>
+      </div>
+    </div>
+  )
+}
+
+function currentIcon(showThumb, isImage, isPDF) {
+  if (!showThumb) return '📄'
+  if (isImage) return '🖼️'
+  if (isPDF) return '📄'
+  return '📎'
 }
